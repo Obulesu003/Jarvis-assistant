@@ -67,8 +67,6 @@ def _load_system_prompt() -> str:
             "Never simulate or guess results — always call the appropriate tool."
         )
 
-
-# ── Hafıza ────────────────────────────────────────────────────────────────────
 _last_memory_input = ""
 
 
@@ -94,8 +92,6 @@ def _update_memory_async(user_text: str, jarvis_text: str) -> None:
         if "429" not in str(e):
             print(f"[Memory] ⚠️ {e}")
 
-
-# ── Tool declarations ─────────────────────────────────────────────────────────
 TOOL_DECLARATIONS = [
     {
         "name": "open_app",
@@ -527,7 +523,6 @@ class JarvisLive:
         print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
 
-        # ── save_memory: sessiz, hızlı, Gemini'ye bildirim yok ───────────────
         if name == "save_memory":
             category = args.get("category", "notes")
             key      = args.get("key", "")
@@ -639,7 +634,6 @@ class JarvisLive:
 
         print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
 
-        # ── Result: tek cümle söyle, dur ──────────────────────────────────────
         return types.FunctionResponse(
             id=fc.id, name=name,
             response={"result": result}
@@ -725,7 +719,6 @@ class JarvisLive:
                         await self.session.send_tool_response(
                             function_responses=fn_responses
                         )
-                        # ── Boş turn YOK — bu "Anladım." sorununu yaratıyordu ──
 
         except Exception as e:
             print(f"[JARVIS] ❌ Recv: {e}")
