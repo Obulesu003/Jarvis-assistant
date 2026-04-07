@@ -253,6 +253,77 @@ class TestLLMOrchestrator:
         assert mock_orchestrator.AUTO_LAUNCH_MAP["whatsapp"] == "https://web.whatsapp.com"
 
     # ------------------------------------------------------------------ #
+    # Smart Summarization                                                  #
+    # ------------------------------------------------------------------ //
+
+    def test_summarize_unread_zero(self, mock_orchestrator):
+        r = {"success": True, "data": {"unread": 0}}
+        assert mock_orchestrator._summarize_result(r) == "You have no unread emails."
+
+    def test_summarize_unread_one(self, mock_orchestrator):
+        r = {"success": True, "data": {"unread": 1}}
+        assert mock_orchestrator._summarize_result(r) == "You have 1 unread email."
+
+    def test_summarize_unread_many(self, mock_orchestrator):
+        r = {"success": True, "data": {"unread": 341}}
+        assert mock_orchestrator._summarize_result(r) == "You have 341 unread emails."
+
+    def test_summarize_emails_small_list(self, mock_orchestrator):
+        emails = [
+            {"sender": "John", "subject": "Meeting", "time": "9:00 AM"},
+            {"sender": "Jane", "subject": "Update", "time": "10:00 AM"},
+        ]
+        r = {"success": True, "data": {"emails": emails}}
+        result = mock_orchestrator._summarize_result(r)
+        assert "John" in result
+        assert "Jane" in result
+        assert "Meeting" in result
+
+    def test_summarize_emails_large_list(self, mock_orchestrator):
+        emails = [{"sender": "John Doe"} for _ in range(10)]
+        r = {"success": True, "data": {"emails": emails}}
+        result = mock_orchestrator._summarize_result(r)
+        assert "10 emails" in result
+        assert "top sender: John Doe" in result
+
+    def test_summarize_events_empty(self, mock_orchestrator):
+        r = {"success": True, "data": {"events": []}}
+        assert mock_orchestrator._summarize_result(r) == "No calendar events found."
+
+    def test_summarize_events_many(self, mock_orchestrator):
+        events = [
+            {"start": "9:00 AM", "subject": "Standup"},
+            {"start": "2:00 PM", "subject": "Review"},
+            {"start": "5:00 PM", "subject": "Sync"},
+        ]
+        r = {"success": True, "data": {"events": events}}
+        result = mock_orchestrator._summarize_result(r)
+        # With 3 events (≤ MAX_TTS_ITEMS), returns individual events
+        assert "Standup" in result
+        assert "Review" in result
+        assert "Sync" in result
+
+    def test_summarize_failed_error(self, mock_orchestrator):
+        r = {"success": False, "error": "Connection refused"}
+        result = mock_orchestrator._summarize_result(r)
+        assert "Failed" in result
+        assert "Connection refused" in result
+
+    def test_format_response_fallback_emails(self, mock_orchestrator):
+        """Fallback formatter should use summarization for email results."""
+        emails = [{"sender": "John", "subject": "Hello"} for _ in range(5)]
+        results = [{"success": True, "data": {"emails": emails}}]
+        response = mock_orchestrator._format_response_fallback([], results)
+        assert "5 emails" in response
+        assert "top sender: John" in response
+
+    def test_format_response_fallback_unread(self, mock_orchestrator):
+        """Fallback formatter should use summarization for unread count."""
+        results = [{"success": True, "data": {"unread": 5}}]
+        response = mock_orchestrator._format_response_fallback([], results)
+        assert "5 unread" in response
+
+    # ------------------------------------------------------------------ #
     # Rate Limit Retry                                                    #
     # ------------------------------------------------------------------ //
 

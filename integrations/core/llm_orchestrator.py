@@ -456,6 +456,7 @@ class LLMOrchestrator:
 
         Handles strings (from adapter.execute_action), dicts (ActionResult from
         _execute_step), and StepResult objects (from UniversalOrchestrator.execute).
+        Uses smart summarization to avoid reading out long lists item by item.
         """
         if not results:
             return "Done."
@@ -465,21 +466,125 @@ class LLMOrchestrator:
             parts = [str(r) for r in results]
             return " | ".join(parts) if parts else "Done."
         if isinstance(first, dict):
-            # ActionResult dict from _execute_step: format each
+            # ActionResult dict from _execute_step: format each with summarization
             summaries = []
             for r in results:
                 if isinstance(r, dict):
                     if r.get("success") is False:
                         summaries.append(f"Failed: {r.get('error', 'unknown error')}")
-                    elif r.get("data"):
-                        summaries.append(str(r.get("data")))
                     else:
-                        summaries.append(str(r))
+                        formatted = self._summarize_result(r)
+                        if formatted:
+                            summaries.append(formatted)
                 else:
                     summaries.append(str(r))
             return " | ".join(summaries) if summaries else "Done."
         # Assume StepResult objects — delegate to orchestrator
         return self._orch._format_response("", steps, results)
+
+    # ------------------------------------------------------------------ #
+    # Smart Summarization                                                  #
+    # ------------------------------------------------------------------ //
+
+    MAX_TTS_ITEMS = 3  # Never read more than this many items aloud
+
+    def _summarize_result(self, r: dict[str, Any]) -> str:
+        """Format a single result dict into a human-friendly summary.
+
+        Designed for TTS: summarizes large lists, reads sender+subject for emails.
+        """
+        # Handle failure cases (called directly, not from _format_response_fallback)
+        if isinstance(r, dict) and r.get("success") is False:
+            return f"Failed: {r.get('error', 'unknown error')}"
+
+        data = r.get("data", r)
+
+        # Unread count — the most common query
+        if isinstance(data, dict) and "unread" in data:
+            unread = data["unread"]
+            if unread == 0:
+                return "You have no unread emails."
+            if unread == 1:
+                return "You have 1 unread email."
+            return f"You have {unread} unread emails."
+
+        # Email list — summarize by sender, time, and count
+        if isinstance(data, dict) and "emails" in data:
+            emails = data["emails"]
+            if not emails:
+                return "No emails found."
+            total = len(emails)
+            today = self._count_today(emails)
+            top = self._top_sender(emails)
+            parts = []
+            if total <= self.MAX_TTS_ITEMS:
+                for e in emails[: self.MAX_TTS_ITEMS]:
+                    sender = e.get("sender", "Unknown")
+                    subject = e.get("subject", "(no subject)")
+                    time_ = e.get("time", "")
+                    parts.append(f"{sender}: {subject} {time_}".strip())
+                return "; ".join(parts)
+            # Large list — summarize
+            parts.append(f"{total} emails found")
+            if today > 0:
+                parts.append(f"{today} from today")
+            if top:
+                parts.append(f"top sender: {top}")
+            return ", ".join(parts)
+
+        # Calendar events — summarize by time
+        if isinstance(data, dict) and "events" in data:
+            events = data["events"]
+            if not events:
+                return "No calendar events found."
+            total = len(events)
+            if total <= self.MAX_TTS_ITEMS:
+                times = [e.get("start", "") or e.get("time", "") for e in events]
+                times = [t for t in times if t]
+                titles = [e.get("subject", e.get("title", "Event")) for e in events]
+                parts = [f"{t}: {title}" for t, title in zip(times, titles) if t]
+                if parts:
+                    return "; ".join(parts)
+                return f"{total} events found."
+            # Many events — summarize
+            times = [e.get("start", "") or e.get("time", "") for e in events]
+            times = [t for t in times if t][:3]
+            return f"{total} events. {', '.join(times)}" if times else f"{total} events."
+
+        # Generic: prefer data field over raw dict
+        if data and data != r:
+            return str(data)
+        return str(r)
+
+    def _count_today(self, emails: list[dict]) -> int:
+        """Count emails with a 'today' indicator."""
+        import datetime
+        today = datetime.date.today()
+        count = 0
+        for e in emails:
+            date_str = e.get("date") or e.get("time") or ""
+            if isinstance(date_str, str) and str(today) in date_str:
+                count += 1
+        return count
+
+    def _top_sender(self, emails: list[dict]) -> str | None:
+        """Return the most common sender name (not email address)."""
+        from collections import Counter
+        senders = []
+        for e in emails:
+            sender = e.get("sender", "")
+            if sender:
+                # Strip email address part if present
+                if "<" in sender:
+                    sender = sender.split("<")[0].strip()
+                senders.append(sender)
+        if not senders:
+            return None
+        by_count = Counter(senders)
+        top = by_count.most_common(1)[0]
+        if top[1] >= 2:
+            return top[0]
+        return None
 
 
 # ======================================================================= #
@@ -536,14 +641,16 @@ RESPONSE_PROMPT = """
 You are the response formatter for MARK-XXXV personal assistant.
 
 Given the user's original request and the results of execution steps,
-format a natural, concise response.
+format a natural, concise response designed for TEXT-TO-SPEECH output.
 
 RULES:
-1. Be conversational, not robotic
-2. Summarize — don't list everything (e.g., "12 emails found, 3 from today")
-3. If an action failed, explain what happened and suggest a fix
-4. If multiple steps succeeded, acknowledge each one briefly
-5. Keep it under 3 sentences unless detail is necessary
+1. Be conversational, not robotic — this is spoken aloud
+2. ALWAYS summarize large lists (never read out every item)
+3. Emails: "Found N emails, M from today, top sender: John"
+4. Calendar: "3 events tomorrow — 9am standup, 2pm review, 5pm sync"
+5. If an action failed, explain what happened and suggest a fix
+6. Keep it under 3 sentences unless detail is necessary
+7. Never output raw JSON, lists with bullets, or table-like formats
 
 User request: "{request}"
 
