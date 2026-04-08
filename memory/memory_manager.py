@@ -1,18 +1,18 @@
 """
-memory_manager.py — MARK XXV Hafıza Sistemi
+memory_manager.py -- MARK XXV Hafıza Sistemi
 ============================================
 Düzeltmeler:
-  - _MEMORY_EVERY_N_TURNS: 3 → 1 (her turda kontrol)
+  - _MEMORY_EVERY_N_TURNS: 3 -> 1 (her turda kontrol)
   - Stage 1 YES/NO check daha geniş kriterlere sahip
   - Extraction prompt daha kapsamlı ve agresif
   - Projeleri, favori şeyleri, arkadaşları daha iyi yakalar
 """
 
 import json
-from datetime import datetime
-from threading import Lock
-from pathlib import Path
 import sys
+from datetime import datetime
+from pathlib import Path
+from threading import Lock
 
 
 def get_base_dir() -> Path:
@@ -30,16 +30,21 @@ MAX_VALUE_LENGTH = 400
 def _empty_memory() -> dict:
     return {
         "identity":      {},
-        "preferences":   {},
-        "projects":      {},
-        "relationships": {},
-        "wishes":        {},
-        "notes":         {}
+        "preferences":    {},
+        "projects":       {},
+        "relationships":  {},
+        "wishes":         {},
+        "notes":          {},
+        "habits":         {},  # recurring behaviours: sleep schedule, work hours, routines
+        "routines":       {},  # multi-step sequences: morning routine, commute steps, etc.
+        "context":         {},  # current situation: current project, ongoing issue, recent events
+        "learned_fixes":   {},  # solutions to recurring problems: known bugs, workaround recipes
     }
 
 
 def load_memory() -> dict:
     if not MEMORY_PATH.exists():
+        print("[Memory] INFO No memory file found, starting fresh")
         return _empty_memory()
 
     with _lock:
@@ -50,10 +55,14 @@ def load_memory() -> dict:
                 for key in base:
                     if key not in data:
                         data[key] = {}
+                # Count non-empty memory entries for debug
+                non_empty = sum(1 for v in data.values() if isinstance(v, dict) and len(v) > 0)
+                print(f"[Memory] INFO Loaded {non_empty} categories from {MEMORY_PATH}")
                 return data
+            print("[Memory] WARN Memory file corrupted (not a dict), starting fresh")
             return _empty_memory()
         except Exception as e:
-            print(f"[Memory] ⚠️ Load error: {e}")
+            print(f"[Memory] WARN Load error: {e}, starting fresh")
             return _empty_memory()
 
 
@@ -70,7 +79,7 @@ def save_memory(memory: dict) -> None:
 
 def _truncate_value(val: str) -> str:
     if isinstance(val, str) and len(val) > MAX_VALUE_LENGTH:
-        return val[:MAX_VALUE_LENGTH].rstrip() + "…"
+        return val[:MAX_VALUE_LENGTH].rstrip() + "..."
     return val
 
 
@@ -110,37 +119,33 @@ def update_memory(memory_update: dict) -> dict:
     memory = load_memory()
     if _recursive_update(memory, memory_update):
         save_memory(memory)
-        print(f"[Memory] 💾 Saved: {list(memory_update.keys())}")
+        print(f"[Memory] [MEM] Saved: {list(memory_update.keys())}")
     return memory
 
 
 def should_extract_memory(user_text: str, jarvis_text: str, api_key: str) -> bool:
     """
-    Stage 1: Hızlı YES/NO kontrolü.
-    Öncekinden daha geniş kriterler — favori şeyler, projeler, arkadaşlar da dahil.
+    Fast heuristic check -- no API call needed. ONLY triggers on explicit personal info keywords.
+    This reduces unnecessary LLM calls by skipping extraction when no personal data is mentioned.
     """
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
-
-        # Her iki tarafı da gönder — Jarvis'in söyledikleri de bilgi içerebilir
-        combined = f"User: {user_text[:300]}\nJarvis: {jarvis_text[:200]}"
-
-        check = model.generate_content(
-            f"Does this conversation contain ANY of the following?\n"
-            f"- Personal facts (name, age, city, job, birthday, nationality)\n"
-            f"- Preferences or favorites (food, color, music, sport, game, film, book, etc.)\n"
-            f"- Active projects or goals the user is working on\n"
-            f"- People in the user's life (friends, family, partner, colleagues)\n"
-            f"- Things the user wants to do or buy in the future\n"
-            f"- Any other fact worth remembering long-term\n\n"
-            f"Reply only YES or NO.\n\nConversation:\n{combined}"
-        )
-        return "YES" in check.text.upper()
-    except Exception as e:
-        print(f"[Memory] ⚠️ Stage1 check failed: {e}")
-        return False
+    text = user_text.lower()
+    # Explicit personal info keywords - only these trigger extraction
+    indicators = [
+        "i am ", "i'm ", "my name is", "i live", "i work", "i'm from",
+        "my birthday", "years old", "i like", "i love", "i hate", "i want",
+        "i need", "i'm building", "i'm working on", "my project", "my friend",
+        "my boss", "my wife", "my husband", "my brother", "my sister",
+        "my dad", "my mom", "my colleague", "favourite", "favorite",
+        "hobby", "hobbies", "dream", "goal", "plan to", "going to buy",
+        "want to buy", "next week", "tomorrow", "monday", "tuesday",
+        "wednesday", "thursday", "friday", "saturday", "sunday",
+        "my girlfriend", "my boyfriend", "my kids", "my son", "my daughter",
+        "my family", "my home", "i study", "i study at", "i graduated",
+        "call me", "you can call me", "my nickname", "i'm from",
+        "i prefer", "i usually", "i always", "i never", "i sometimes",
+        "my schedule", "my routine", "i wake up", "i go to sleep",
+    ]
+    return any(kw in text for kw in indicators)
 
 
 def extract_memory(user_text: str, jarvis_text: str, api_key: str) -> dict:
@@ -148,27 +153,30 @@ def extract_memory(user_text: str, jarvis_text: str, api_key: str) -> dict:
     Stage 2: Detaylı çıkarım. Her iki tarafı da analiz eder.
     """
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        from google.genai import Client
+        client = Client(api_key=api_key)
 
         combined = f"User: {user_text[:500]}\nJarvis: {jarvis_text[:300]}"
 
-        raw = model.generate_content(
+        prompt = (
             f"Extract ALL memorable personal facts from this conversation. Any language.\n"
             f"Return ONLY valid JSON. Use {{}} if truly nothing is worth saving.\n\n"
             f"Category guide:\n"
-            f"  identity      → name, age, birthday, city, country, job, school, nationality, language\n"
-            f"  preferences   → ANY favorite or preferred thing:\n"
+            f"  identity      -> name, age, birthday, city, country, job, school, nationality, language\n"
+            f"  preferences   -> ANY favorite or preferred thing:\n"
             f"                  favorite_food, favorite_color, favorite_music, favorite_film,\n"
             f"                  favorite_game, favorite_sport, favorite_book, favorite_artist,\n"
             f"                  favorite_country, hobbies, interests, dislikes, etc.\n"
-            f"  projects      → projects being built, ongoing work, goals, ideas in progress\n"
+            f"  projects      -> projects being built, ongoing work, goals, ideas in progress\n"
             f"                  (e.g. mark_xxv: 'Building a JARVIS-like AI assistant')\n"
-            f"  relationships → people mentioned: friends, family, partner, colleagues\n"
+            f"  relationships -> people mentioned: friends, family, partner, colleagues\n"
             f"                  (e.g. best_friend_ali: 'Best friend, met in university')\n"
-            f"  wishes        → future plans, things to buy, travel plans, dreams\n"
-            f"  notes         → anything else worth remembering (habits, schedule, etc.)\n\n"
+            f"  wishes         -> future plans, things to buy, travel plans, dreams\n"
+            f"  notes          -> anything else worth remembering\n"
+            f"  habits         -> recurring behaviours: sleep hours, work schedule, when active, coffee breaks, exercise times\n"
+            f"  routines       -> multi-step sequences: morning routine, how they start the day, commute steps, shutdown routine\n"
+            f"  context        -> current situation: what project they're working on, what's the current blocker, what's ongoing\n"
+            f"  learned_fixes   -> solutions to recurring problems: known bugs they've encountered, workaround recipes they've used\n\n"
             f"IMPORTANT:\n"
             f"- Be LIBERAL: if something MIGHT be worth remembering, include it.\n"
             f"- Extract from BOTH user and Jarvis turns.\n"
@@ -180,8 +188,16 @@ def extract_memory(user_text: str, jarvis_text: str, api_key: str) -> dict:
             f' "projects":{{"mark_xxv":{{"value":"JARVIS-like AI assistant on Windows"}}}},\n'
             f' "relationships":{{"friend_yusuf":{{"value":"close friend"}}}},\n'
             f' "wishes":{{"buy_guitar":{{"value":"wants an acoustic guitar"}}}},\n'
-            f' "notes":{{"works_at_night":{{"value":"usually active late at night"}}}}}}\n\n'
+            f' "notes":{{"reminder_tone":{{"value":"likes formal tone"}}}},\n'
+            f' "habits":{{"late_nighter":{{"value":"most productive after 10pm"}}}},\n'
+            f' "routines":{{"morning":{{"value":"coffee then email then code"}}}},\n'
+            f' "context":{{"current_project":{{"value":"building MARK XXXV voice assistant"}}}},\n'
+            f' "learned_fixes":{{"pyautogui_broken":{{"value":"use playwright instead for WhatsApp"}}}}}}\n\n'
             f"Conversation:\n{combined}\n\nJSON:"
+        )
+        raw = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=prompt
         ).text.strip()
 
         import re
@@ -195,7 +211,7 @@ def extract_memory(user_text: str, jarvis_text: str, api_key: str) -> dict:
         return {}
     except Exception as e:
         if "429" not in str(e):
-            print(f"[Memory] ⚠️ Extract failed: {e}")
+            print(f"[Memory] WARN Extract failed: {e}")
         return {}
 
 
@@ -265,19 +281,56 @@ def format_memory_for_prompt(memory: dict | None) -> str:
             if val:
                 lines.append(f"  - {key}: {val}")
 
+    habits = memory.get("habits", {})
+    if habits:
+        lines.append("")
+        lines.append("Habits & schedule:")
+        for key, entry in list(habits.items())[:8]:
+            val = entry.get("value") if isinstance(entry, dict) else entry
+            if val:
+                lines.append(f"  - {key.replace('_', ' ').title()}: {val}")
+
+    routines = memory.get("routines", {})
+    if routines:
+        lines.append("")
+        lines.append("Routines:")
+        for key, entry in list(routines.items())[:8]:
+            val = entry.get("value") if isinstance(entry, dict) else entry
+            if val:
+                lines.append(f"  - {key.replace('_', ' ').title()}: {val}")
+
+    context = memory.get("context", {})
+    if context:
+        lines.append("")
+        lines.append("Current context:")
+        for key, entry in list(context.items())[:6]:
+            val = entry.get("value") if isinstance(entry, dict) else entry
+            if val:
+                lines.append(f"  - {key.replace('_', ' ').title()}: {val}")
+
+    learned_fixes = memory.get("learned_fixes", {})
+    if learned_fixes:
+        lines.append("")
+        lines.append("Learned fixes & workarounds:")
+        for key, entry in list(learned_fixes.items())[:8]:
+            val = entry.get("value") if isinstance(entry, dict) else entry
+            if val:
+                lines.append(f"  - {key.replace('_', ' ').title()}: {val}")
+
     if not lines:
         return ""
 
-    header = "[WHAT YOU KNOW ABOUT THIS PERSON — use naturally, never recite like a list]\n"
+    header = "[WHAT YOU KNOW ABOUT THIS PERSON -- use naturally, never recite like a list]\n"
     result = header + "\n".join(lines)
     if len(result) > 2000:
-        result = result[:1997] + "…"
+        result = result[:1997] + "..."
 
     return result + "\n"
 
 
 def remember(key: str, value: str, category: str = "notes") -> str:
-    valid = {"identity", "preferences", "projects", "relationships", "wishes", "notes"}
+    valid = {"identity", "preferences", "projects", "relationships", "wishes",
+             "notes", "habits", "routines", "context", "learned_fixes"}
     if category not in valid:
         category = "notes"
     update_memory({category: {key: {"value": value}}})
@@ -294,5 +347,5 @@ def forget(key: str, category: str = "notes") -> str:
         return f"Forgotten: {category}/{key}"
     return f"Not found: {category}/{key}"
 
-# Alias — eski import'larla uyumluluk için
+# Alias -- eski import'larla uyumluluk için
 forget_memory = forget

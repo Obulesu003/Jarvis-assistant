@@ -1,7 +1,14 @@
 import json
 import re
 import sys
+import threading
+import time
 from pathlib import Path
+
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
 
 
 def get_base_dir() -> Path:
@@ -10,8 +17,76 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+# ── Plan Cache ────────────────────────────────────────────────────────────────
+
+_PLAN_CACHE_TTL  = 600   # 10 minutes
+_PLAN_CACHE_LOCK = threading.Lock()
+_PLAN_CACHE: dict[str, tuple[dict, float]] = {}
+_PLAN_CACHE_PATH = get_base_dir() / "memory" / "plans_cache.json"
+
+
+def _load_plan_cache() -> None:
+    """Load plan cache from disk on startup."""
+    if not _PLAN_CACHE_PATH.exists():
+        return
+    try:
+        data = json.loads(_PLAN_CACHE_PATH.read_text(encoding="utf-8"))
+        now  = time.time()
+        for key, entry in data.items():
+            # Only load entries that haven't expired
+            if now - entry.get("_ts", 0) < _PLAN_CACHE_TTL:
+                plan = entry.get("plan")
+                if plan:
+                    _PLAN_CACHE[key] = (plan, entry.get("_ts", 0))
+        print(f"[Planner] [CACHE] Loaded {len(_PLAN_CACHE)} cached plans")
+    except Exception as e:
+        print(f"[Planner] [CACHE] Load failed: {e}")
+
+
+def _save_plan_cache() -> None:
+    """Persist plan cache to disk."""
+    try:
+        _PLAN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        data = {k: {"plan": v[0], "_ts": v[1]} for k, v in _PLAN_CACHE.items()}
+        _PLAN_CACHE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[Planner] [CACHE] Save failed: {e}")
+
+
+def _make_cache_key(goal: str) -> str:
+    """Normalize goal for cache lookup."""
+    normalized = goal.lower().strip()
+    normalized = re.sub(r"\s+", " ", normalized)  # collapse whitespace
+    return normalized
+
+
+def _get_cached_plan(goal: str) -> dict | None:
+    """Return cached plan if fresh, else None."""
+    key = _make_cache_key(goal)
+    with _PLAN_CACHE_LOCK:
+        entry = _PLAN_CACHE.get(key)
+        if not entry:
+            return None
+        plan, cached_at = entry
+        if time.time() - cached_at > _PLAN_CACHE_TTL:
+            del _PLAN_CACHE[key]
+            return None
+        print(f"[Planner] [CACHE] HIT  key={goal[:60]}")
+        return plan
+
+
+def _set_cached_plan(goal: str, plan: dict) -> None:
+    """Store plan in cache and persist."""
+    key = _make_cache_key(goal)
+    now = time.time()
+    with _PLAN_CACHE_LOCK:
+        _PLAN_CACHE[key] = (plan, now)
+    # Async persist (don't block)
+    threading.Thread(target=_save_plan_cache, daemon=True).start()
+
+
+# Load cache on module import
+_load_plan_cache()
 
 
 PLANNER_PROMPT = """You are the planning module of MARK XXV, a personal AI assistant.
@@ -23,7 +98,8 @@ ABSOLUTE RULES:
 - Use web_search for ANY information retrieval, research, or current data.
 - Use file_controller to save content to disk.
 - Use cmd_control to open files or run system commands.
-- Max 5 steps. Use the minimum steps needed.
+- Maximum 12 steps. Use the minimum steps needed. Break complex goals into sequential sub-plans if needed.
+- For parallel independent tasks (e.g. "search X and Y simultaneously"), mark with "parallel": true in the step. For dependent steps, use "depends_on": [step_number].
 
 AVAILABLE TOOLS AND THEIR PARAMETERS:
 
@@ -31,7 +107,7 @@ open_app
   app_name: string (required)
 
 web_search
-  query: string (required) — write a clear, focused search query
+  query: string (required) -- write a clear, focused search query
   mode: "search" or "compare" (optional, default: search)
   items: list of strings (optional, for compare mode)
   aspect: string (optional, for compare mode)
@@ -52,17 +128,53 @@ browser_control
 
 file_controller
   action: "write" | "create_file" | "read" | "list" | "delete" | "move" | "copy" | "find" | "disk_usage" (required)
-  path: string — use "desktop" for Desktop folder
-  name: string — filename
-  content: string — file content (for write/create_file)
+  path: string -- use "desktop" for Desktop folder
+  name: string -- filename
+  content: string -- file content (for write/create_file)
 
 cmd_control
-  task: string (required) — natural language description of what to do
+  task: string (required) -- natural language description of what to do
   visible: boolean (optional)
+  action: string (optional) -- "run" (default), "session_start", "session_run", "session_status", "session_end"
+  session_id: string (optional) -- for persistent sessions
+  speak_output: boolean (optional) -- format output for TTS
+
+claude_tool
+  task: string (required) -- what to ask Claude Code to do
+  mode: string (optional) -- "ask" (default), "write", "review", "run"
+  project: string (optional) -- project directory
+  session_id: string (optional) -- session identifier
+  timeout: int (optional, default 60)
+
+claude_session
+  action: string (required) -- "start" | "continue" | "status" | "end"
+  session_id: string (optional, default "default")
+  project: string (optional) -- project directory
+  task: string (optional) -- prompt for start/continue
+  timeout: int (optional, default 90)
+
+shell_start
+  session_id: string (optional, default "default") -- shell identifier
+  cwd: string (optional) -- working directory for Claude
+
+shell_send
+  prompt: string (required) -- what to ask Claude Code
+  timeout: int (optional, default 120) -- seconds to wait
+  auto_approve: boolean (optional, default false) -- auto-confirm y/n prompts
+  session_id: string (optional)
+
+shell_status
+  session_id: string (optional)
+
+shell_interrupt
+  session_id: string (optional)
+
+shell_end
+  session_id: string (optional)
 
 computer_settings
   action: string (required)
-  description: string — natural language description
+  description: string -- natural language description
   value: string (optional)
 
 computer_control
@@ -75,7 +187,7 @@ computer_control
   description: string (for screen_find/screen_click)
 
 screen_process
-  text: string (required) — what to analyze or ask about the screen
+  text: string (required) -- what to analyze or ask about the screen
   angle: "screen" | "camera" (optional)
 
 send_message
@@ -115,6 +227,11 @@ code_helper
 dev_agent
   description: string (required)
   language: string (optional)
+
+agent_task
+  goal: string (required) -- the task to execute as a subtask
+  priority: string (optional) -- low, normal, or high (default: normal)
+
 EXAMPLES:
 
 Goal: "research mechanical engineering and save it to a notepad file"
@@ -151,12 +268,43 @@ Steps:
 
 send_message | receiver: John, message_text: "There is a meeting tomorrow", platform: WhatsApp
 
+Goal: "ask Claude Code to explain the code in main.py"
+Steps:
+
+claude_tool | task: "explain the code in main.py", mode: "ask"
+
+Goal: "let Claude review the browser control code"
+Steps:
+
+claude_tool | task: "review actions/browser_control.py for quality and bugs", mode: "review"
+
+Goal: "start Claude Code shell and ask it to refactor the executor"
+Steps:
+
+shell_start
+shell_send | prompt: "refactor agent/executor.py to improve error handling", timeout: 120
+shell_status
+
+Goal: "ask Claude to build a new feature, interrupt if it gets stuck"
+Steps:
+
+shell_start | session_id: "feature-build"
+shell_send | prompt: "implement a logging system for all agent actions", timeout: 120
+shell_status
+shell_interrupt | session_id: "feature-build"
+shell_end | session_id: "feature-build"
+
+Goal: "run a CMD command to check disk space"
+Steps:
+
+cmd_control | task: "check disk space", visible: false
+
 Goal: "Open the clock and set a reminder for 30 minutes later"
 Steps:
 
 reminder | date: [today], time: [now+30min], message: "Reminder"
 
-OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
+OUTPUT -- return ONLY valid JSON, no markdown, no explanation, no code blocks:
 {
   "goal": "...",
   "steps": [
@@ -173,56 +321,72 @@ OUTPUT — return ONLY valid JSON, no markdown, no explanation, no code blocks:
 
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    # Fallback
+    import json
+    from pathlib import Path
+    cfg = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+    with open(cfg, encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
 def create_plan(goal: str, context: str = "") -> dict:
-    import google.generativeai as genai
+    from google.genai import Client
+    from google.genai.types import GenerateContentConfig
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash-lite",
-        system_instruction=PLANNER_PROMPT
-    )
+    # ── Check cache first ───────────────────────────────────────────────────
+    cached = _get_cached_plan(goal)
+    if cached:
+        return cached
+
+    client = Client(api_key=_get_api_key())
 
     user_input = f"Goal: {goal}"
     if context:
         user_input += f"\n\nContext: {context}"
 
     try:
-        response = model.generate_content(user_input)
+        # Use gemini-2.0-flash-exp for faster planning (tool routing doesn't need 2.5)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=user_input,
+            config=GenerateContentConfig(system_instruction=PLANNER_PROMPT)
+        )
         text     = response.text.strip()
         text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
 
         plan = json.loads(text)
 
         if "steps" not in plan or not isinstance(plan["steps"], list):
-            raise ValueError("Invalid plan structure")
+            msg = "Invalid plan structure"
+            raise ValueError(msg)
 
         for step in plan["steps"]:
             if step.get("tool") in ("generated_code",):
-                print(f"[Planner] ⚠️ generated_code detected in step {step.get('step')} — replacing with web_search")
+                print(f"[Planner] WARN generated_code detected in step {step.get('step')} -- replacing with web_search")
                 desc = step.get("description", goal)
                 step["tool"] = "web_search"
                 step["parameters"] = {"query": desc[:200]}
 
-        print(f"[Planner] ✅ Plan: {len(plan['steps'])} steps")
+        print(f"[Planner] OK Plan: {len(plan['steps'])} steps")
         for s in plan["steps"]:
             print(f"  Step {s['step']}: [{s['tool']}] {s['description']}")
 
+        # Cache the successful plan
+        _set_cached_plan(goal, plan)
         return plan
 
     except json.JSONDecodeError as e:
-        print(f"[Planner] ⚠️ JSON parse failed: {e}")
+        print(f"[Planner] WARN JSON parse failed: {e}")
         return _fallback_plan(goal)
     except Exception as e:
-        print(f"[Planner] ⚠️ Planning failed: {e}")
+        print(f"[Planner] WARN Planning failed: {e}")
         return _fallback_plan(goal)
 
 
 def _fallback_plan(goal: str) -> dict:
-    print("[Planner] 🔄 Fallback plan")
+    print("[Planner] RETRY Fallback plan")
     return {
         "goal": goal,
         "steps": [
@@ -238,13 +402,10 @@ def _fallback_plan(goal: str) -> dict:
 
 
 def replan(goal: str, completed_steps: list, failed_step: dict, error: str) -> dict:
-    import google.generativeai as genai
+    from google.genai import Client
+    from google.genai.types import GenerateContentConfig
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=PLANNER_PROMPT
-    )
+    client = Client(api_key=_get_api_key())
 
     completed_summary = "\n".join(
         f"  - Step {s['step']} ({s['tool']}): DONE" for s in completed_steps
@@ -261,7 +422,11 @@ Error: {error}
 Create a REVISED plan for the remaining work only. Do not repeat completed steps."""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=GenerateContentConfig(system_instruction=PLANNER_PROMPT)
+        )
         text     = response.text.strip()
         text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
         plan     = json.loads(text)
@@ -271,8 +436,8 @@ Create a REVISED plan for the remaining work only. Do not repeat completed steps
                 step["tool"] = "web_search"
                 step["parameters"] = {"query": step.get("description", goal)[:200]}
 
-        print(f"[Planner] 🔄 Revised plan: {len(plan['steps'])} steps")
+        print(f"[Planner] RETRY Revised plan: {len(plan['steps'])} steps")
         return plan
     except Exception as e:
-        print(f"[Planner] ⚠️ Replan failed: {e}")
+        print(f"[Planner] WARN Replan failed: {e}")
         return _fallback_plan(goal)
