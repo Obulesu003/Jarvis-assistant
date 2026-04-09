@@ -255,10 +255,10 @@ def _update_memory_async(user_text: str, jarvis_text: str) -> None:
         data = extract_memory(user_text, jarvis_text, api_key)
         if data:
             update_memory(data)
-            logging.getLogger("Memory").info('OK {list(data.keys())}')
+            logging.getLogger("Memory").info(f'OK {list(data.keys())}')
     except Exception as e:
         if "429" not in str(e):
-            logging.getLogger("Memory").info('WARN {e}')
+            logging.getLogger("Memory").info(f'WARN {e}')
 
 
 def _summarize_conversation() -> None:
@@ -267,9 +267,9 @@ def _summarize_conversation() -> None:
         conv_mgr = get_conversation_manager()
         summary = conv_mgr.summarize()
         if summary:
-            logging.getLogger("Conversation").info('NOTE Summarized: {summary[:120]}')
+            logging.getLogger("Conversation").info(f'NOTE Summarized: {summary[:120]}')
     except Exception as e:
-        logging.getLogger("Conversation").info('WARN Summarization failed: {e}')
+        logging.getLogger("Conversation").info(f'WARN Summarization failed: {e}')
 
 
 # -- Tool declarations ---------------------------------------------------------
@@ -1113,7 +1113,7 @@ class JarvisLive:
         hud = get_cinematic_hud()
         self._vpe = VisualPresenceEngine(hud) if hud else None
 
-    def _get_memory_bridge(self):
+    def _get_memory_bridge(self) -> "MemoryBridge | None":
         """Lazily initialize MemoryBridge."""
         if self._memory_bridge is None:
             try:
@@ -1127,7 +1127,7 @@ class JarvisLive:
                 self._memory_bridge = None
         return self._memory_bridge
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the live session and run session review."""
         # Phase 6: Session review on shutdown
         bridge = self._get_memory_bridge()
@@ -1212,7 +1212,7 @@ class JarvisLive:
             self._ctx.current_goal = f"resuming: {interrupted_text[:50]}"
             self._ctx.pending_confirmation.append(("resume", resume_prompt))
 
-    def _on_turn_complete(self, user_text: str, jarvis_text: str):
+    def _on_turn_complete(self, user_text: str, jarvis_text: str) -> None:
         """Called when a conversation turn completes."""
         if hasattr(self, '_ctx'):
             if self._ctx.interrupted:
@@ -1403,7 +1403,7 @@ class JarvisLive:
         if hasattr(self, '_vpe') and self._vpe:
             self._vpe.on_tool_start(name)
 
-        logging.getLogger("JARVIS").info('>> {name}  {args}')
+        logging.getLogger("JARVIS").info(f'>> {name}  {args}')
         self.ui.set_state("THINKING")
 
         # -- Tool result cache (per-tool TTLs from core/cache.py) -------------
@@ -1414,7 +1414,7 @@ class JarvisLive:
             cache = get_cache()
             cached = cache.get(name, args)
             if cached:
-                logging.getLogger("JARVIS").info('Cache hit for {name}')
+                logging.getLogger("JARVIS").info(f'Cache hit for {name}')
                 if not self.ui.muted:
                     self.ui.set_state("LISTENING")
                 return types.FunctionResponse(
@@ -1429,7 +1429,7 @@ class JarvisLive:
             value    = args.get("value", "")
             if key and value:
                 update_memory({category: {key: {"value": value}}})
-                logging.getLogger("Memory").info('save_memory: {category}/{key} = {value}')
+                logging.getLogger("Memory").info(f'save_memory: {category}/{key} = {value}')
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(
@@ -1784,7 +1784,7 @@ class JarvisLive:
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-        logging.getLogger("JARVIS").info('OUT {name} -> {str(result)[:80]}')
+        logging.getLogger("JARVIS").info(f'OUT {name} -> {str(result)[:80]}')
 
         # -- Cache the result --------------------------------------------------
         if name in cacheable and isinstance(result, str) and result and not result.startswith("Tool '"):
@@ -1851,7 +1851,7 @@ class JarvisLive:
                 logging.getLogger("JARVIS").info('MIC Mic stream open')
                 await stop_event.wait()
         except Exception as e:
-            logging.getLogger("JARVIS").info('ERROR Mic: {e}')
+            logging.getLogger("JARVIS").info(f'ERROR Mic: {e}')
             raise
 
     async def _receive_audio(self):
@@ -1956,7 +1956,7 @@ class JarvisLive:
                     if response.tool_call:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
-                            logging.getLogger("JARVIS").info('CALL {fc.name}')
+                            logging.getLogger("JARVIS").info(f'CALL {fc.name}')
                             fr = await self._execute_tool(fc)
                             fn_responses.append(fr)
                         await self.session.send_tool_response(
@@ -1965,7 +1965,7 @@ class JarvisLive:
                         # -- Boş turn YOK -- bu "Anladım." sorununu yaratıyordu --
 
         except Exception as e:
-            logging.getLogger("JARVIS").info('ERROR Recv: {e}')
+            logging.getLogger("JARVIS").info(f'ERROR Recv: {e}')
             traceback.print_exc()
             raise
 
@@ -1986,7 +1986,7 @@ class JarvisLive:
                 chunk = await self.audio_in_queue.get()
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
-            logging.getLogger("JARVIS").info('ERROR Play: {e}')
+            logging.getLogger("JARVIS").info(f'ERROR Play: {e}')
             raise
         finally:
             self.set_speaking(False)
@@ -2024,7 +2024,7 @@ class JarvisLive:
                     tg.create_task(self._play_audio())
 
             except Exception as e:
-                logging.getLogger("JARVIS").info('[!] {e}')
+                logging.getLogger("JARVIS").info(f'[!] {e}')
                 traceback.print_exc()
 
             self.set_speaking(False)
@@ -2055,7 +2055,7 @@ def main():
         proactive.start()
         logging.getLogger("JARVIS").info('PROACTIVE Proactive monitor started')
     except Exception as e:
-        logging.getLogger("JARVIS").info('PROACTIVE Monitor failed to start: {e}')
+        logging.getLogger("JARVIS").info(f'PROACTIVE Monitor failed to start: {e}')
 
     # Initialize JARVIS memory (4-layer system)
     try:
@@ -2063,7 +2063,7 @@ def main():
         j_memory = get_j_memory()
         logging.getLogger("JARVIS").info('MEMORY Memory system ready')
     except Exception as e:
-        logging.getLogger("JARVIS").info('MEMORY Failed to initialize: {e}')
+        logging.getLogger("JARVIS").info(f'MEMORY Failed to initialize: {e}')
 
     ui = JarvisUI("face.png")
 
@@ -2099,7 +2099,7 @@ def main():
                 ui.write_log("SYS: Cinematic HUD active.")
                 logging.getLogger("JARVIS").info('HUD: Cinematic JARVIS display started')
         except Exception as e:
-            logging.getLogger("JARVIS").info('HUD: Cinematic HUD failed to start: {e}')
+            logging.getLogger("JARVIS").info(f'HUD: Cinematic HUD failed to start: {e}')
 
         # Start the System Tray icon (JARVIS presence in notification area)
         tray = get_system_tray()
@@ -2174,7 +2174,7 @@ def main():
             ui.write_log("SYS: Wake word listening active.")
             logging.getLogger("JARVIS").info("AUDIO Pipeline started — say 'Hey JARVIS' to activate")
         except Exception as e:
-            logging.getLogger("JARVIS").info('AUDIO Pipeline failed to start: {e}')
+            logging.getLogger("JARVIS").info(f'AUDIO Pipeline failed to start: {e}')
 
         # Start the Screen Watchdog (JARVIS's proactive eyes)
         watchdog = get_screen_watchdog()
@@ -2188,7 +2188,7 @@ def main():
                 on_change_func=lambda result: logger.debug(f"[Proactive] Screen: {result.get('screen', '')[:80]}")
             )
         except Exception as e:
-            logging.getLogger("JARVIS").info('PROACTIVE Watchdog registration failed: {e}')
+            logging.getLogger("JARVIS").info(f'PROACTIVE Watchdog registration failed: {e}')
 
         jarvis = JarvisLive(ui)
         jarvis_speak_ref.set(jarvis.speak)  # Wire proactive monitor + briefing to jarvis's speak
