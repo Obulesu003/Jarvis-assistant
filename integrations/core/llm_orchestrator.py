@@ -48,6 +48,8 @@ class LLMOrchestrator:
         self._orch = universal_orchestrator
         self._gemini_key = gemini_key or self._get_gemini_key()
         self._model = None  # Lazily initialized
+        self._client = None  # Lazily initialized for google.genai Client
+        self._memory_bridge = None  # Lazily initialized
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -94,7 +96,7 @@ class LLMOrchestrator:
         Returns empty list on failure (triggers keyword fallback).
         """
         try:
-            model = self._get_model()
+            client = self._get_client()
         except Exception as e:
             logger.warning("[LLMOrchestrator] Gemini unavailable: %s", e)
             return []
@@ -110,9 +112,20 @@ class LLMOrchestrator:
             history=history_str,
         )
 
+        # Inject memory context before calling Gemini
+        try:
+            bridge = self._get_memory_bridge()
+            if bridge:
+                memory_ctx = bridge.build_context(request)
+                if memory_ctx:
+                    prompt = f"{memory_ctx}\n\n---\n\n{prompt}"
+        except Exception:
+            pass  # Memory context is optional — don't fail the request
+
         for attempt in range(MAX_RETRIES):
             try:
-                response = model.generate_content(prompt)
+                client = self._get_client()
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
                 text = response.text.strip()
                 logger.debug("[LLMOrchestrator] LLM response: %s", text[:500])
                 return self._parse_steps_from_response(text)
@@ -173,7 +186,7 @@ class LLMOrchestrator:
     ) -> str:
         """Use Gemini to format execution results into natural language."""
         try:
-            model = self._get_model()
+            client = self._get_client()
         except Exception:
             return self._format_response_fallback(steps, results)
 
@@ -186,7 +199,8 @@ class LLMOrchestrator:
 
         for attempt in range(MAX_RETRIES):
             try:
-                response = model.generate_content(prompt)
+                client = self._get_client()
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
                 text = response.text.strip()
                 if text:
                     return text
@@ -370,26 +384,36 @@ class LLMOrchestrator:
     # Gemini Helpers                                                      #
     # ------------------------------------------------------------------ #
 
-    def _get_model(self) -> Any:
-        """Get or create the Gemini model instance."""
-        if self._model is None:
+    def _get_client(self) -> Any:
+        """Get or create the Gemini client using the google.genai Client API."""
+        if self._client is None:
             try:
-                from google import genai
+                from google.genai import Client
+                self._client = Client(api_key=self._gemini_key)
             except ImportError:
-                try:
-                    import google.generativeai as genai
-                    msg = (
-                        "google-generativeai is deprecated. "
-                        "Please upgrade: pip install google-genai"
-                    )
-                    raise RuntimeError(msg)
-                except ImportError:
-                    msg = "google-genai not installed. Run: pip install google-genai"
-                    raise RuntimeError(msg)
+                msg = "google-genai not installed. Run: pip install google-genai"
+                raise RuntimeError(msg)
+        return self._client
 
-            genai.configure(api_key=self._gemini_key)
-            self._model = genai.GenerativeModel("gemini-2.5-flash")
+    def _get_memory_bridge(self):
+        """Lazily initialize the MemoryBridge."""
+        if self._memory_bridge is None:
+            try:
+                from memory.j_memory import JARVISMemory
+                from core.memory_bridge import MemoryBridge
+                memory = JARVISMemory()
+                memory.initialize()
+                self._memory_bridge = MemoryBridge(memory)
+            except Exception as e:
+                logger.debug(f"[LLMOrchestrator] MemoryBridge unavailable: {e}")
+                self._memory_bridge = None
+        return self._memory_bridge
 
+    def _get_model(self) -> Any:
+        """Get or create the Gemini models interface."""
+        if self._model is None:
+            self._get_client()
+            self._model = self._client.models
         return self._model
 
     def _get_gemini_key(self) -> str:
@@ -484,7 +508,7 @@ class LLMOrchestrator:
 
     # ------------------------------------------------------------------ #
     # Smart Summarization                                                  #
-    # ------------------------------------------------------------------ //
+    # ------------------------------------------------------------------ #
 
     MAX_TTS_ITEMS = 3  # Never read more than this many items aloud
 
