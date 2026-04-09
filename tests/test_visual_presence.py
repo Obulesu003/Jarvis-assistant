@@ -1,4 +1,5 @@
-import pytest, unittest.mock as mock, math, sys
+import sys
+import unittest.mock as mock
 sys.path.insert(0, str(__file__).rsplit("tests", 1)[0])
 
 from core.visual_presence import JARVISVisualState, VisualPresenceEngine

@@ -1,12 +1,8 @@
 """VisualPresenceEngine — drives the cinematic HUD's visual state."""
 import math
-import time as time_module
 from collections import deque
 from enum import Enum
-
-import logging
-
-logger = logging.getLogger(__name__)
+from typing import Deque
 
 
 class JARVISVisualState(Enum):
@@ -36,7 +32,7 @@ class VisualPresenceEngine:
     def __init__(self, hud):
         self._hud = hud
         self._state = JARVISVisualState.IDLE
-        self._waveform_data: deque = deque(maxlen=64)
+        self._waveform_data: Deque[float] = deque(maxlen=64)
         self._idle_pulse = 0.0
 
     def set_state(self, state: JARVISVisualState):
