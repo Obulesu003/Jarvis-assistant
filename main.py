@@ -1170,7 +1170,7 @@ class JarvisLive:
         # 3. Set turn state
         self._turn_state = "interrupted"
 
-        logger.info("[TurnModel] User interrupted JARVIS mid-sentence")
+        logging.getLogger("JARVIS").info("[TurnModel] User interrupted JARVIS mid-sentence")
 
     def _offer_resume(self, interrupted_text: str):
         """After handling interruption, offer to continue."""
@@ -1782,7 +1782,11 @@ class JarvisLive:
             with self._cooldown_lock:
                 on_cooldown = self._speech_cooldown
             # Don't send audio if JARVIS is speaking OR on cooldown after speaking
-            if not jarvis_speaking and not on_cooldown and not self.ui.muted:
+            if jarvis_speaking:
+                # User is speaking while JARVIS is speaking — interruption
+                self._handle_interruption(self._current_speech_text)
+                return
+            if not on_cooldown and not self.ui.muted:
                 data = indata.tobytes()
                 # Phase 4: Audio buffer -- keep last 3 seconds in memory
                 with self._buffer_lock:
