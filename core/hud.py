@@ -31,6 +31,7 @@ class JARVISHUD:
         self._screen_w = 1920
         self._screen_h = 1080
         self._current_state_color = [0, 180, 255]
+        self._context_lock = threading.Lock()
 
     def _build_ui(self, dpg, screen_w: int, screen_h: int):
         """Build the HUD layout in DearPyGui."""
@@ -184,7 +185,7 @@ class JARVISHUD:
             except Exception:
                 pass
 
-    def update_time(self):
+    def update_time(self) -> None:
         """Update time display."""
         now = datetime.now().strftime("%H:%M:%S")
         self._time = now
@@ -194,7 +195,7 @@ class JARVISHUD:
             except Exception:
                 pass
 
-    def set_status_color(self, rgb: tuple[int, int, int]):
+    def set_status_color(self, rgb: tuple[int, int, int]) -> None:
         """Change the JARVIS status circle color."""
         if not self._dpg:
             return
@@ -204,7 +205,7 @@ class JARVISHUD:
         except Exception:
             pass
 
-    def set_state_label(self, label: str):
+    def set_state_label(self, label: str) -> None:
         """Set the state text label."""
         if not self._dpg:
             return
@@ -236,8 +237,10 @@ class JARVISHUD:
             def clear():
                 time.sleep(2)
                 try:
-                    if self._screen_context:
-                        self._dpg.configure_item("SCREEN_TEXT", default_value=f"Screen: {self._screen_context[:80]}")
+                    with self._context_lock:
+                        context = self._screen_context
+                    if context:
+                        self._dpg.configure_item("SCREEN_TEXT", default_value=f"Screen: {context[:80]}")
                     else:
                         self._dpg.configure_item("SCREEN_TEXT", default_value="")
                 except Exception:
@@ -284,11 +287,12 @@ class JARVISHUD:
         if not self._dpg:
             return
         try:
-            self._dpg.configure_item("STATUS_CIRCLE", fill=[0, 180, 255, alpha])
+            r, g, b = self._current_state_color
+            self._dpg.configure_item("STATUS_CIRCLE", color=[r, g, b, alpha], fill=alpha)
         except Exception:
             pass
 
-    def update_waveform(self, data: list):
+    def update_waveform(self, data: list) -> None:
         """Update the waveform visualization."""
         if not self._dpg or not data:
             return
