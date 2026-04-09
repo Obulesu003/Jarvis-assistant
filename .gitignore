@@ -1,0 +1,49 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (secrets)
+config/api_keys.json
+config/api_keys.enc
+config/settings.json
+
+# Session memory (too large to version)
+memory/conversations/
+memory/long_term.json
+memory/long_term_memory.json
+memory/schedules.json
+
+# Chroma vector DB
+memory/episodes/chroma.sqlite3
+memory/semantic/chroma.sqlite3
+memory/docs/chroma.sqlite3
+
+# API test files
+whatsapp_test.png
+
+# Models (too large)
+models/
+
+# Claude Code local files
+.claude/

@@ -1,0 +1,171 @@
+"""
+gesture_control.py - JARVIS responds to hand gestures via webcam.
+MediaPipe Hands — CPU-capable, accurate at desk distance.
+Gestures: wave (wake), thumbs up (acknowledge), thumbs down (cancel), open palm (pause), fist (silence)
+"""
+import logging
+import threading
+import time
+
+logger = logging.getLogger(__name__)
+
+
+class GestureController:
+    """
+    JARVIS responds to hand gestures via webcam.
+    MediaPipe Hands — CPU-capable, accurate at desk distance.
+
+    Gestures:
+    - wave → wake word alternative
+    - thumbs up → acknowledge / continue
+    - thumbs down → cancel / stop
+    - open palm → pause listening
+    - fist → silence / do not disturb
+    """
+
+    GESTURES = {
+        "thumbs_up": "acknowledge",
+        "thumbs_down": "cancel",
+        "open_palm": "pause",
+        "fist": "silence",
+    }
+
+    def __init__(self, speak_func=None, hud=None):
+        self._speak = speak_func
+        self._hud = hud
+        self._hands = None
+        self._camera = None
+        self._enabled = False
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._last_gesture_time = 0.0
+        self._gesture_cooldown = 3.0  # seconds between gesture reactions
+
+    def initialize(self):
+        """Initialize MediaPipe Hands."""
+        try:
+            import mediapipe as mp
+            self._mp_hands = mp.solutions.hands
+            self._hands = self._mp_hands.Hands(
+                max_num_hands=1,
+                min_detection_confidence=0.7,
+                min_tracking_confidence=0.5,
+            )
+            logger.info("[Gesture] MediaPipe Hands initialized")
+        except ImportError:
+            logger.warning("[Gesture] mediapipe not installed. Run: pip install mediapipe")
+            self._hands = None
+
+    def start(self):
+        """Start gesture recognition camera feed."""
+        if not self._hands:
+            return
+        if self._running:
+            return
+
+        self._enabled = True
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="GestureController")
+        self._thread.start()
+        logger.info("[Gesture] Camera started")
+
+    def stop(self):
+        """Stop gesture recognition."""
+        self._running = False
+        self._enabled = False
+        if self._camera:
+            self._camera.release()
+            self._camera = None
+
+    def _loop(self):
+        """Main camera loop."""
+        try:
+            import cv2
+            self._camera = cv2.VideoCapture(0)
+            if not self._camera.isOpened():
+                logger.warning("[Gesture] Camera not available")
+                return
+
+            while self._running:
+                ret, frame = self._camera.read()
+                if not ret:
+                    continue
+
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = self._hands.process(rgb)
+
+                if results.multi_hand_landmarks:
+                    for hand in results.multi_hand_landmarks:
+                        gesture = self._classify(hand)
+                        if gesture and time.time() - self._last_gesture_time > self._gesture_cooldown:
+                            self._react(gesture)
+                            self._last_gesture_time = time.time()
+
+                time.sleep(0.033)  # ~30fps
+        except Exception as e:
+            logger.error(f"[Gesture] Camera loop error: {e}")
+        finally:
+            if self._camera:
+                self._camera.release()
+
+    def _classify(self, landmarks) -> str | None:
+        """Classify hand pose from MediaPipe landmarks."""
+        thumb_tip = landmarks.landmark[4]
+        index_tip = landmarks.landmark[8]
+        index_base = landmarks.landmark[5]
+        middle_tip = landmarks.landmark[12]
+        middle_base = landmarks.landmark[9]
+        ring_tip = landmarks.landmark[16]
+        ring_base = landmarks.landmark[13]
+        pinky_tip = landmarks.landmark[20]
+        pinky_base = landmarks.landmark[17]
+
+        def is_extended(tip, base):
+            return tip.y < base.y
+
+        # Thumbs up: thumb up, other fingers curled
+        if thumb_tip.y < landmarks.landmark[2].y and not is_extended(index_tip, index_base):
+            if not is_extended(middle_tip, middle_base) and not is_extended(ring_tip, ring_base):
+                return "thumbs_up"
+
+        # Thumbs down: thumb down
+        if thumb_tip.y > landmarks.landmark[2].y and not is_extended(index_tip, index_base):
+            return "thumbs_down"
+
+        # Open palm: all fingers extended
+        fingers_extended = sum([
+            is_extended(index_tip, index_base),
+            is_extended(middle_tip, middle_base),
+            is_extended(ring_tip, ring_base),
+            is_extended(pinky_tip, pinky_base),
+        ])
+        if fingers_extended >= 3:
+            return "open_palm"
+
+        # Fist: no fingers extended
+        if fingers_extended == 0 and not is_extended(thumb_tip, landmarks.landmark[2]):
+            return "fist"
+
+        return None
+
+    def _react(self, gesture: str):
+        """React to a recognized gesture."""
+        action = self.GESTURES.get(gesture, "")
+        logger.info(f"[Gesture] Recognized: {gesture} -> {action}")
+
+        if action == "acknowledge":
+            if self._hud:
+                self._hud.set_state("listening")
+            if self._speak:
+                self._speak("Acknowledged, sir.")
+        elif action == "pause":
+            if self._hud:
+                self._hud.set_state("idle")
+            if self._speak:
+                self._speak("Pausing. Wave to resume.")
+        elif action == "silence":
+            if self._speak:
+                self._speak("Silence mode active.")
+        elif action == "cancel":
+            if self._speak:
+                self._speak("Cancelled.")

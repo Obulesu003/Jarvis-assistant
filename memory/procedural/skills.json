@@ -1,0 +1,13 @@
+{
+  "test_skill": {
+    "name": "test_skill",
+    "description": "Test",
+    "steps": [
+      "step1",
+      "step2"
+    ],
+    "trigger": "test",
+    "usage_count": 0,
+    "created": "2026-04-09T05:02:36.795818"
+  }
+}
