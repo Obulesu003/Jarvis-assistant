@@ -175,8 +175,8 @@ class JARVISMemory:
             results = self._episodic.get_recent(hours=24, limit=1)
             if results:
                 return results[0].get("document", "")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[JARVISMemory] get_recent_topic failed: %s", e)
         return None
 
     def get_active(self) -> list[str]:
@@ -186,7 +186,8 @@ class JARVISMemory:
         try:
             skills = self._procedural.list_all()
             return list(skills) if isinstance(skills, list) else []
-        except Exception:
+        except Exception as e:
+            logger.warning("[JARVISMemory] get_active failed: %s", e)
             return []
 
     def get_session_memories(self, since: float) -> list[dict]:
@@ -194,8 +195,10 @@ class JARVISMemory:
         if not self._episodic:
             return []
         try:
-            return self._episodic.get_recent(hours=24, limit=50)
-        except Exception:
+            hours = max(0.1, (time.time() - since) / 3600)
+            return self._episodic.get_recent(hours=hours, limit=50)
+        except Exception as e:
+            logger.warning("[JARVISMemory] get_session_memories failed: %s", e)
             return []
 
     def get_preferences_for(self, request: str) -> list[str]:
@@ -205,7 +208,8 @@ class JARVISMemory:
         try:
             facts = self._semantic.search(request)
             return facts
-        except Exception:
+        except Exception as e:
+            logger.warning("[JARVISMemory] get_preferences_for failed: %s", e)
             return []
 
 
