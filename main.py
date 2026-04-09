@@ -1105,6 +1105,37 @@ class JarvisLive:
         self._turn_state = "listening"  # listening | jarvis_speaking | interrupted
         self._current_speech_text = ""  # What JARVIS is currently saying
 
+        # Phase 6: MemoryBridge -- initialized lazily on shutdown
+        self._memory_bridge = None
+
+        # Phase 6: VisualPresenceEngine -- connects HUD animations to JARVIS state
+        from core.visual_presence import VisualPresenceEngine
+        hud = get_cinematic_hud()
+        self._vpe = VisualPresenceEngine(hud) if hud else None
+
+    def _get_memory_bridge(self):
+        """Lazily initialize MemoryBridge."""
+        if self._memory_bridge is None:
+            try:
+                from memory.j_memory import JARVISMemory
+                from core.memory_bridge import MemoryBridge
+                memory = JARVISMemory()
+                memory.initialize()
+                self._memory_bridge = MemoryBridge(memory)
+            except Exception as e:
+                logging.getLogger("JARVIS").warning(f"[JarvisLive] MemoryBridge unavailable: {e}")
+                self._memory_bridge = None
+        return self._memory_bridge
+
+    def stop(self):
+        """Stop the live session and run session review."""
+        # Phase 6: Session review on shutdown
+        bridge = self._get_memory_bridge()
+        if bridge:
+            bridge.on_session_end()
+        self._running = False
+        logging.getLogger("JARVIS").info("[JarvisLive] Session stopped")
+
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
             return
@@ -1367,6 +1398,10 @@ class JarvisLive:
 
         # Phase 6: Track tools used for ConversationContextEngine
         self._last_tools_used.append(name)
+
+        # Phase 6: Track tool start for VisualPresenceEngine
+        if hasattr(self, '_vpe') and self._vpe:
+            self._vpe.on_tool_start(name)
 
         logging.getLogger("JARVIS").info('>> {name}  {args}')
         self.ui.set_state("THINKING")
@@ -2158,6 +2193,9 @@ def main():
         jarvis = JarvisLive(ui)
         jarvis_speak_ref.set(jarvis.speak)  # Wire proactive monitor + briefing to jarvis's speak
 
+        # Phase 6: Wire CCE and MemoryBridge into proactive monitor
+        proactive.set_context_engine(jarvis._ctx)
+
         # Wire cinematic HUD to JarvisLive state changes
         def _sync_hud_state(state_name: str):
             try:
@@ -2195,6 +2233,11 @@ def main():
             asyncio.run(jarvis.run())
         except KeyboardInterrupt:
             logging.getLogger(__name__).info('\\n[X] Shutting down...')
+            # Phase 6: Run session review and stop JarvisLive
+            try:
+                jarvis.stop()
+            except Exception:
+                pass
             # Play JARVIS shutdown farewell
             try:
                 from core.intro_music import play_shutdown_scene
