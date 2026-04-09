@@ -1101,6 +1101,10 @@ class JarvisLive:
         self._ctx = ConversationContextEngine()
         self._last_tools_used = []  # Track tools per turn
 
+        # Phase 7: Turn-based interruption model
+        self._turn_state = "listening"  # listening | jarvis_speaking | interrupted
+        self._current_speech_text = ""  # What JARVIS is currently saying
+
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
             return
@@ -1119,6 +1123,9 @@ class JarvisLive:
             with self._cooldown_lock:
                 self._speech_cooldown = True  # Block mic input while speaking
             self.ui.set_state("SPEAKING")
+            # Phase 7: Track turn state — JARVIS is speaking
+            if self._turn_state != "interrupted":
+                self._turn_state = "jarvis_speaking"
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
             # Release cooldown after a brief pause (so user can interject)
@@ -1146,6 +1153,47 @@ class JarvisLive:
         short = str(error)[:120]
         self.ui.write_log(f"ERR: {tool_name} -- {short}")
         self.speak(f"Sir, {tool_name} encountered an error. {short}")
+
+    # Phase 7: Turn-based interruption model
+
+    def _handle_interruption(self, jarvis_in_progress: str = ""):
+        """User spoke while JARVIS was mid-sentence."""
+        # 1. Stop JARVIS's speech immediately
+        if self._local_tts:
+            self._local_tts.stop_async()
+
+        # 2. Record what JARVIS was saying
+        self._current_speech_text = jarvis_in_progress
+        if hasattr(self, '_ctx'):
+            self._ctx.on_interruption(jarvis_in_progress)
+
+        # 3. Set turn state
+        self._turn_state = "interrupted"
+
+        logger.info("[TurnModel] User interrupted JARVIS mid-sentence")
+
+    def _offer_resume(self, interrupted_text: str):
+        """After handling interruption, offer to continue."""
+        if len(interrupted_text) < 20:
+            return  # Too short to resume meaningfully
+        resume_prompt = "Shall I continue where I left off?"
+        if hasattr(self, '_ctx'):
+            self._ctx.current_goal = f"resuming: {interrupted_text[:50]}"
+            self._ctx.pending_confirmation.append(("resume", resume_prompt))
+
+    def _on_turn_complete(self, user_text: str, jarvis_text: str):
+        """Called when a conversation turn completes."""
+        if hasattr(self, '_ctx'):
+            if self._ctx.interrupted:
+                interrupted = self._ctx.get_interrupted_text()
+                self._ctx.clear_interrupted()
+                self._offer_resume(interrupted)
+            else:
+                tools = getattr(self, '_last_tools_used', [])
+                self._ctx.on_user_turn(user_text)
+                self._ctx.on_jarvis_turn(jarvis_text, tools)
+
+        self._turn_state = "listening"
 
     def _load_voice_settings(self) -> dict:
         """Load voice settings from config/settings.json."""
@@ -1845,13 +1893,12 @@ class JarvisLive:
                                 conv_mgr.add_user_turn(full_in)
                                 conv_mgr.add_jarvis_turn(full_out)
 
-                                # Phase 6: Track user turn in ConversationContextEngine
+                                # Phase 6/7: Track conversation turn via _on_turn_complete
                                 if hasattr(self, '_ctx'):
                                     try:
-                                        self._ctx.on_user_turn(full_in)
-                                        self._ctx.on_jarvis_turn(full_out, getattr(self, '_last_tools_used', []))
+                                        self._on_turn_complete(full_in, full_out)
                                     except Exception as e:
-                                        logging.getLogger("JARVIS").warning(f"CCE tracking failed: {e}")
+                                        logging.getLogger("JARVIS").warning(f"Turn tracking failed: {e}")
 
                                 # Check if summarization is needed
                                 if conv_mgr.should_summarize():
