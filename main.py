@@ -1099,6 +1099,7 @@ class JarvisLive:
         # Phase 6: ConversationContextEngine -- tracks turns across the session
         from core.conversation_context import ConversationContextEngine
         self._ctx = ConversationContextEngine()
+        self._last_tools_used = []  # Track tools per turn
 
     def _on_text_command(self, text: str):
         if not self._loop or not self.session:
@@ -1317,8 +1318,6 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         # Phase 6: Track tools used for ConversationContextEngine
-        if not hasattr(self, '_last_tools_used'):
-            self._last_tools_used = []
         self._last_tools_used.append(name)
 
         logging.getLogger("JARVIS").info('>> {name}  {args}')
@@ -1839,8 +1838,7 @@ class JarvisLive:
 
                             if full_in and len(full_in) > 5:
                                 # Phase 6: Reset tools used tracker for this new turn
-                                if hasattr(self, '_last_tools_used'):
-                                    self._last_tools_used = []
+                                self._last_tools_used = []
 
                                 # Update conversation buffer
                                 conv_mgr = get_conversation_manager()
@@ -1849,8 +1847,11 @@ class JarvisLive:
 
                                 # Phase 6: Track user turn in ConversationContextEngine
                                 if hasattr(self, '_ctx'):
-                                    self._ctx.on_user_turn(full_in)
-                                    self._ctx.on_jarvis_turn(full_out, getattr(self, '_last_tools_used', []))
+                                    try:
+                                        self._ctx.on_user_turn(full_in)
+                                        self._ctx.on_jarvis_turn(full_out, getattr(self, '_last_tools_used', []))
+                                    except Exception as e:
+                                        logging.getLogger("JARVIS").warning(f"CCE tracking failed: {e}")
 
                                 # Check if summarization is needed
                                 if conv_mgr.should_summarize():
