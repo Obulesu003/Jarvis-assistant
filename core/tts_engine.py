@@ -22,6 +22,7 @@ class TTSEngine:
         self.is_speaking = False
         self._is_installed = None
         self._process: subprocess.Popen | None = None
+        self._lock = threading.Lock()
 
     def _check_installation(self) -> bool:
         """Check if Piper CLI is available."""
@@ -44,7 +45,9 @@ class TTSEngine:
         if not self._check_installation():
             return None
 
-        self.is_speaking = True
+        with self._lock:
+            self.is_speaking = True
+            self._process = None
         try:
             if not Path(self.voice_path).exists():
                 logger.warning(f"[TTS] Voice file not found: {self.voice_path}")
@@ -58,7 +61,8 @@ class TTSEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
-            self._process = process  # Store reference for stop_async()
+            with self._lock:
+                self._process = process  # Store reference for stop_async()
             audio_bytes, _ = process.communicate(input=text.encode(), timeout=10)
 
             # Piper outputs raw PCM 16-bit mono at 22050Hz
@@ -79,8 +83,9 @@ class TTSEngine:
             logger.error(f"[TTS] Error: {e}")
             return None
         finally:
-            self.is_speaking = False
-            self._process = None
+            with self._lock:
+                self._process = None
+                self.is_speaking = False
 
     def _play_audio(self, audio: np.ndarray, samplerate: int = 22050):
         """Play audio through speakers using sounddevice."""
@@ -100,13 +105,14 @@ class TTSEngine:
 
     def stop_async(self):
         """Stop current speech immediately. Used for interruption."""
-        self.is_speaking = False
-        if self._process and self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
+        with self._lock:
+            self.is_speaking = False
+            if self._process and self._process.poll() is None:
+                self._process.terminate()
+                try:
+                    self._process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
 
     @property
     def is_ready(self) -> bool:
