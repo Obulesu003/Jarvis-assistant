@@ -1,141 +1,12 @@
+import logging  # migrated from print()
 import asyncio
-import threading
 import concurrent.futures
-import platform
-import shutil
-import subprocess
-from pathlib import Path
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+import contextlib
+import threading
+import time
 
-def _get_default_browser_id() -> str:
-    """Returns raw default browser identifier string for current OS."""
-    system = platform.system()
-    try:
-        if system == "Windows":
-            import winreg
-            key     = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice"
-            )
-            prog_id = winreg.QueryValueEx(key, "ProgId")[0].lower()
-            winreg.CloseKey(key)
-            return prog_id
-
-        elif system == "Darwin":
-            result = subprocess.run(
-                ["defaults", "read",
-                 "com.apple.LaunchServices/com.apple.launchservices.secure",
-                 "LSHandlers"],
-                capture_output=True, text=True, timeout=5
-            )
-            return result.stdout.lower()
-
-        elif system == "Linux":
-            result = subprocess.run(
-                ["xdg-settings", "get", "default-web-browser"],
-                capture_output=True, text=True, timeout=5
-            )
-            return result.stdout.lower()
-
-    except Exception:
-        pass
-
-    return ""
-
-_BROWSER_BINARIES = {
-    "Windows": {
-        "opera":   ["opera.exe"],
-        "brave":   ["brave.exe"],
-        "vivaldi": ["vivaldi.exe"],
-        "chrome":  ["chrome.exe"],
-        "firefox": ["firefox.exe"],
-    },
-    "Darwin": {
-        "opera":   ["opera"],
-        "brave":   ["brave browser", "brave"],
-        "vivaldi": ["vivaldi"],
-        "chrome":  ["google chrome", "google-chrome"],
-        "firefox": ["firefox"],
-    },
-    "Linux": {
-        "opera":   ["opera", "opera-stable"],
-        "brave":   ["brave-browser", "brave"],
-        "vivaldi": ["vivaldi-stable", "vivaldi"],
-        "chrome":  ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"],
-        "firefox": ["firefox"],
-    },
-}
-
-
-def _get_opera_executable() -> str | None:
-    if platform.system() != "Windows":
-        return None
-    try:
-        import winreg
-        candidate_keys = [
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\opera.exe",
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\launcher.exe",
-            r"SOFTWARE\Clients\StartMenuInternet\OperaStable\shell\open\command",
-            r"SOFTWARE\Clients\StartMenuInternet\OperaGXStable\shell\open\command",
-        ]
-        for key_path in candidate_keys:
-            for hive in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
-                try:
-                    key  = winreg.OpenKey(hive, key_path)
-                    val  = winreg.QueryValue(key, None)
-                    winreg.CloseKey(key)
-                    exe  = val.strip().strip('"').split('"')[0].split(" --")[0].strip()
-                    if exe and Path(exe).exists():
-                        print(f"[Browser] 🔍 Opera found via registry: {exe}")
-                        return exe
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return None
-
-
-def _find_browser_executable(prog_id: str) -> tuple:
-    system  = platform.system()
-    os_bins = _BROWSER_BINARIES.get(system, {})
-
-    if any(x in prog_id for x in ["firefox", "mozilla"]):
-        return "firefox", None, None
-
-    if "safari" in prog_id:
-        return "webkit", None, None
-
-    if "edge" in prog_id:
-        return "chromium", None, "msedge"
-
-    if "opera" in prog_id:
-        exe = _get_opera_executable()
-        if exe:
-            return "chromium", exe, None
-        for binary in os_bins.get("opera", []):
-            path = shutil.which(binary)
-            if path:
-                return "chromium", path, None
-
-    browser_patterns = {
-        "brave":   ["brave"],
-        "vivaldi": ["vivaldi"],
-        "chrome":  ["chrome"],
-    }
-    for browser_name, patterns in browser_patterns.items():
-        if not any(p in prog_id for p in patterns):
-            continue
-        binaries = os_bins.get(browser_name, [])
-        for binary in binaries:
-            path = shutil.which(binary)
-            if path:
-                print(f"[Browser] 🔍 Found {browser_name} at: {path}")
-                return "chromium", path, None
-
-    if "chrome" in prog_id or not prog_id:
-        return "chromium", None, "chrome"
-
-    return "chromium", None, None
+from playwright.async_api import TimeoutError as PlaywrightTimeout
+from playwright.async_api import async_playwright
 
 
 class _BrowserThread:
@@ -150,9 +21,7 @@ class _BrowserThread:
         self._incog_context = None       # Incognito/private context
         self._page          = None       # Normal page
         self._incog_page    = None       # Incognito page
-        self._engine_name   = "chromium" # Bilgi için sakla
-        self._exe_path      = None
-        self._channel       = None
+        self._pywinauto_app = None       # pywinauto app for UI control
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -175,65 +44,117 @@ class _BrowserThread:
 
     def run(self, coro, timeout: int = 30):
         if not self._loop:
-            raise RuntimeError("BrowserThread not started.")
+            msg = "BrowserThread not started."
+            raise RuntimeError(msg)
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
 
-    # ── Tarayıcı başlatma ────────────────────────────────────────────────────
+    # -- Connect to system Chrome ---------------------------------------------
+
+    async def _connect_to_existing_chrome(self) -> bool:
+        """Try to connect to an already-running Chrome via pywinauto."""
+        try:
+            import pywinauto
+            from pywinauto import Desktop
+
+            # Find Chrome windows
+            desktop = Desktop(backend='win32')
+            chrome_windows = []
+
+            for w in desktop.windows():
+                try:
+                    title = w.window_text()
+                    if title and ('chrome' in title.lower() or 'google' in title.lower()):
+                        chrome_windows.append(w)
+                except Exception:
+                    continue
+
+            if chrome_windows:
+                # Connect to the first Chrome window
+                app = pywinauto.Application(backend='win32').connect(
+                    handle=chrome_windows[0].handle
+                )
+                self._pywinauto_app = app
+                logging.getLogger("Browser").debug('Connected to existing Chrome via pywinauto')
+                return True
+        except Exception as e:
+            logging.getLogger("Browser").info(f'pywinauto Chrome connect failed: {e}')
+        return False
 
     async def _launch_browser_if_needed(self):
-        """Ana tarayıcıyı başlat (henüz başlatılmadıysa)."""
+        """Try to connect to existing Chrome, or launch with channel='chrome' as fallback."""
         if self._browser and self._browser.is_connected():
             return
 
-        prog_id                              = _get_default_browser_id()
-        self._engine_name, self._exe_path, self._channel = _find_browser_executable(prog_id)
-        engine = getattr(self._playwright, self._engine_name)
+        # Try pywinauto first to use existing Chrome
+        connected = await self._connect_to_existing_chrome()
+        if connected:
+            return
 
-        launch_kwargs = {"headless": False}
-        if self._engine_name == "chromium":
-            launch_kwargs["args"] = ["--start-maximized"]
-        if self._exe_path:
-            launch_kwargs["executable_path"] = self._exe_path
-        elif self._channel:
-            launch_kwargs["channel"] = self._channel
-
+        # Fallback: try CDP to any running Chrome with debug port
+        import os
         try:
-            self._browser = await engine.launch(**launch_kwargs)
-            print(
-                f"[Browser] ✅ Launched ({self._engine_name}"
-                f"{' / ' + self._channel if self._channel else ''}"
-                f"{' / ' + self._exe_path if self._exe_path else ''})"
-            )
-        except Exception as e:
-            print(f"[Browser] ⚠️ Launch failed ({e}), falling back to built-in Chromium")
+            browser = await self._playwright.chromium.connect_over_cdp("ws://localhost:9222")
+            if browser.is_connected():
+                self._browser = browser
+                logging.getLogger("Browser").debug('Connected via CDP debug port')
+                return
+        except Exception:
+            pass
+
+        # Last resort: launch Chrome with persistent profile
+        chrome_user_data = r"C:\Users\bobul\AppData\Local\Google\Chrome\User Data"
+        try:
             self._browser = await self._playwright.chromium.launch(
                 headless=False,
-                args=["--start-maximized"]
+                channel="chrome",
+                args=[
+                    "--start-maximized",
+                    f"--user-data-dir={chrome_user_data}",
+                    "--profile-directory=Default",
+                ],
             )
+            logging.getLogger("Browser").debug('Launched Chrome with persistent profile')
+        except Exception as e:
+            # Fallback to current behavior if profile fails
+            logging.getLogger("Browser").warning(f'Persistent profile failed ({e}), trying default launch')
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    headless=False,
+                    channel="chrome",
+                    args=["--start-maximized"],
+                )
+                logging.getLogger("Browser").debug('Launched Chrome (fallback)')
+            except Exception as fallback_e:
+                logging.getLogger("Browser").error(f'Could not connect to Chrome: {fallback_e}')
+                logging.getLogger("Browser").info('Please open Chrome manually and try again')
+                raise
 
     async def _get_page(self, incognito: bool = False):
         """
-        Sayfa döndürür.
-        incognito=True → özel/gizli sekme
-        incognito=False → normal sekme
+        Returns a page. Uses pywinauto if already connected to Chrome,
+        otherwise tries Playwright with existing sessions.
         """
+        # If we have pywinauto connection, we can't create new pages
+        # Just note this and return a message
+        if self._pywinauto_app:
+            return None  # Will use pywinauto instead
+
         await self._launch_browser_if_needed()
 
         if incognito:
             return await self._get_incognito_page()
-        else:
-            return await self._get_normal_page()
+        return await self._get_normal_page()
 
     async def _get_normal_page(self):
         if self._page is None or self._page.is_closed():
-            if self._context is None:
+            if self._context is None or not self._context.pages:
                 self._context = await self._browser.new_context(
                     viewport=None,
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
+                        "Chrome/124.0.0.0 Safari/537.36"
                     )
                 )
             self._page = await self._context.new_page()
@@ -241,74 +162,46 @@ class _BrowserThread:
 
     async def _get_incognito_page(self):
         """
-        Gizli/özel sekme açar.
-        Chromium → new_context(no_viewport, storage_state temiz)
-        Firefox  → new_context(incognito)  [Playwright'ta firefox private]
+        Opens a new incognito context in the existing Chrome (via CDP).
+        Each incognito page is a separate isolated context but same Chrome window.
         """
-        # Mevcut gizli sayfa varsa kapat, yenisini aç
         if self._incog_page and not self._incog_page.is_closed():
             return self._incog_page
 
-        # Önceki gizli context'i kapat
         if self._incog_context:
-            try:
+            with contextlib.suppress(Exception):
                 await self._incog_context.close()
-            except Exception:
-                pass
 
-        print("[Browser] 🕵️  Opening private/incognito context...")
-
-        if self._engine_name == "firefox":
-            # Firefox: firefox_user_prefs ile private browsing
-            self._incog_context = await self._browser.new_context(
-                viewport=None,
-                firefox_user_prefs={
-                    "browser.privatebrowsing.autostart": True
-                }
+        self._incog_context = await self._browser.new_context(
+            viewport=None,
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
             )
-        else:
-            # Chromium tabanlı: --incognito argümanı ile ayrı tarayıcı aç
-            # (Playwright'ta context-level incognito için browser.new_context yeterli
-            #  çünkü her context zaten izole storage'a sahip.
-            #  Gerçek incognito görünümü için ayrı browser instance gerekir.)
-            engine = getattr(self._playwright, self._engine_name)
-            launch_kwargs = {
-                "headless": False,
-                "args": ["--incognito", "--start-maximized"],
-            }
-            if self._exe_path:
-                launch_kwargs["executable_path"] = self._exe_path
-            elif self._channel:
-                launch_kwargs["channel"] = self._channel
-
-            try:
-                incog_browser = await engine.launch(**launch_kwargs)
-            except Exception:
-                incog_browser = await self._playwright.chromium.launch(
-                    headless=False,
-                    args=["--incognito", "--start-maximized"]
-                )
-
-            self._incog_context = await incog_browser.new_context(
-                viewport=None,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            )
-
+        )
         self._incog_page = await self._incog_context.new_page()
-        print("[Browser] ✅ Private/incognito page ready.")
+        logging.getLogger("Browser").debug('Incognito page ready in your Chrome.')
         return self._incog_page
 
-    # ── Eylemler ─────────────────────────────────────────────────────────────
+    # -- Actions -------------------------------------------------------------
 
     async def _go_to(self, url: str, incognito: bool = False) -> str:
         if not url.startswith("http"):
             url = "https://" + url
+
+        # If using pywinauto (connected to existing Chrome), open URL properly
+        if self._pywinauto_app:
+            return await self._pywinauto_open_url(url)
+
         page = await self._get_page(incognito=incognito)
+        if page is None:
+            return f"Could not connect to browser for: {url}"
+
         try:
+            # Skip navigation if already at this URL
+            if page.url and (url in page.url or page.url in url):
+                return f"Already at: {page.url}"
             await page.goto(url, wait_until="domcontentloaded", timeout=15000)
             mode = " [private]" if incognito else ""
             return f"Opened{mode}: {page.url}"
@@ -332,7 +225,7 @@ class _BrowserThread:
             if text:
                 await page.get_by_text(text, exact=False).first.click(timeout=8000)
                 return f"Clicked: '{text}'"
-            elif selector:
+            if selector:
                 await page.click(selector, timeout=8000)
                 return f"Clicked: {selector}"
             return "No selector or text provided."
@@ -367,7 +260,7 @@ class _BrowserThread:
             await page.keyboard.press(key)
             return f"Pressed: {key}"
         except Exception as e:
-            return f"Key error: {e}"
+            return f"Press error: {e}"
 
     async def _get_text(self, incognito: bool = False) -> str:
         page = await self._get_page(incognito=incognito)
@@ -385,13 +278,18 @@ class _BrowserThread:
                 el = page.locator(selector).first
                 await el.clear()
                 await el.type(str(value), delay=40)
-                results.append(f"✓ {selector}")
+                results.append(f"[OK] {selector}")
             except Exception as e:
-                results.append(f"✗ {selector}: {e}")
+                results.append(f"[FAIL] {selector}: {e}")
         return "Form filled: " + ", ".join(results)
 
     async def _smart_click(self, description: str, incognito: bool = False) -> str:
         page       = await self._get_page(incognito=incognito)
+
+        # If no page (using pywinauto), try pywinauto approach
+        if page is None:
+            return await self._pywinauto_click(description)
+
         desc_lower = description.lower()
 
         role_hints = {
@@ -422,6 +320,64 @@ class _BrowserThread:
 
         return f"Could not find: '{description}'"
 
+    async def _pywinauto_click(self, description: str) -> str:
+        """Click using pywinauto on existing Chrome window."""
+        try:
+            import pywinauto
+            import pywinauto.keyboard
+
+            if not self._pywinauto_app:
+                return f"Chrome not connected for pywinauto: '{description}'"
+
+            dlg = self._pywinauto_app.window(visible=True)
+
+            # Try to find and click by text
+            try:
+                elem = dlg.child_window(title_re=f".*{description}.*", control_type="Button")
+                elem.click()
+                return f"Clicked (pywinauto): '{description}'"
+            except Exception:
+                pass
+
+            try:
+                elem = dlg.child_window(title_re=f".*{description}.*", control_type="Hyperlink")
+                elem.click()
+                return f"Clicked (pywinauto): '{description}'"
+            except Exception:
+                pass
+
+            return f"Could not find element: '{description}'"
+        except Exception as e:
+            return f"pywinauto click failed: {e}"
+
+    async def _pywinauto_open_url(self, url: str) -> str:
+        """Open URL in existing Chrome using Ctrl+L address bar + Ctrl+T new tab."""
+        try:
+            import pywinauto.keyboard
+
+            if not self._pywinauto_app:
+                return f"Chrome not connected"
+
+            dlg = self._pywinauto_app.window(visible=True)
+            dlg.set_focus()
+
+            # Open new tab with Ctrl+T
+            pywinauto.keyboard.send_keys("^t")
+            time.sleep(0.3)
+
+            # Focus address bar with Ctrl+L
+            pywinauto.keyboard.send_keys("^l")
+            time.sleep(0.2)
+
+            # Type URL and press Enter
+            pywinauto.keyboard.send_keys(url)
+            pywinauto.keyboard.send_keys("{ENTER}")
+            time.sleep(1)
+
+            return f"Opened in Chrome: {url}"
+        except Exception as e:
+            return f"Could not open URL: {e}"
+
     async def _smart_type(self, description: str, text: str, incognito: bool = False) -> str:
         page = await self._get_page(incognito=incognito)
 
@@ -441,28 +397,33 @@ class _BrowserThread:
         return f"Could not find input: '{description}'"
 
     async def _close_browser(self) -> str:
+        """Disconnect from Chrome. Does NOT close Chrome itself — only Playwright's connection."""
         if self._incog_context:
-            try:
+            with contextlib.suppress(Exception):
                 await self._incog_context.close()
-            except Exception:
-                pass
             self._incog_context = None
             self._incog_page    = None
 
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
+        if self._context:
+            with contextlib.suppress(Exception):
+                await self._context.close()
             self._context = None
             self._page    = None
 
+        if self._browser:
+            with contextlib.suppress(Exception):
+                await self._browser.disconnect()
+            self._browser = None
+
         if self._playwright:
-            await self._playwright.stop()
+            with contextlib.suppress(Exception):
+                await self._playwright.stop()
             self._playwright = None
 
-        return "Browser closed."
+        return "Disconnected from Chrome. Chrome itself stays open."
 
 
-# ── Singleton browser thread ─────────────────────────────────────────────────
+# -- Singleton browser thread -------------------------------------------------
 
 _bt         = _BrowserThread()
 _bt_started = False
@@ -477,7 +438,7 @@ def _ensure_started():
             _bt_started = True
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# -- Public API ---------------------------------------------------------------
 
 def browser_control(
     parameters:     dict,
@@ -486,7 +447,9 @@ def browser_control(
     session_memory=None
 ) -> str:
     """
-    Browser controller — auto-detects and uses system default browser.
+    Browser controller -- uses system Chrome via channel='chrome'.
+    All your existing sessions (YouTube, Gmail, ChatGPT) are available.
+    No debug port needed -- just ensure Google Chrome is your default browser.
 
     parameters:
         action      : go_to | search | click | type | scroll | fill_form |
@@ -502,13 +465,13 @@ def browser_control(
         key         : key name for press (e.g. Enter, Escape, Tab)
         fields      : {selector: value} dict for fill_form
         clear_first : bool, clear input before typing (default: True)
-        incognito   : bool, open in private/incognito mode (default: False)
+        incognito   : bool, open in incognito tab in your Chrome (default: False)
     """
     _ensure_started()
 
-    action   = (parameters or {}).get("action", "").lower().strip()
-    incognito = bool(parameters.get("incognito", False))
-    result   = "Unknown action."
+    action    = (parameters or {}).get("action", "").lower().strip()
+    incognito  = bool(parameters.get("incognito", False))
+    result    = "Unknown action."
 
     try:
         if action == "go_to":
@@ -578,12 +541,32 @@ def browser_control(
             result = f"Unknown action: {action}"
 
     except concurrent.futures.TimeoutError:
-        result = "Browser action timed out."
+        logging.getLogger("Browser").warning("Action timed out, resetting connection...")
+        _bt._browser = None
+        _bt._context = None
+        _bt._page = None
+        _bt._incog_context = None
+        _bt._incog_page = None
+        result = "Browser action timed out. Reconnected for next request."
     except Exception as e:
-        result = f"Browser error: {e}"
+        # Don't spam errors if browser just disconnected
+        error_str = str(e)
+        if "Target page" in error_str or "closed" in error_str.lower() or "disconnected" in error_str.lower():
+            logging.getLogger("Browser").info("Browser disconnected, resetting connection...")
+            # Reset browser state for next call
+            _bt._browser = None
+            _bt._context = None
+            _bt._page = None
+            _bt._incog_context = None
+            _bt._incog_page = None
+            result = f"Browser disconnected. Try again."
+        else:
+            result = f"Browser error: {e}"
 
-    print(f"[Browser] {result[:80]}")
+    logging.getLogger("Browser").info(f'{result[:80]}')
     if player:
         player.write_log(f"[browser] {result[:60]}")
 
     return result
+
+

@@ -1,8 +1,9 @@
 # actions/web_search.py
-# MARK XXV — Web Search
+# MARK XXV -- Web Search
 # Primary: Gemini google_search (yeni google.genai SDK)
 # Fallback: DuckDuckGo (ddgs)
 
+import logging  # migrated from print()
 import json
 import sys
 from pathlib import Path
@@ -13,11 +14,17 @@ def get_base_dir() -> Path:
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    BASE_DIR = get_base_dir()
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
@@ -35,7 +42,8 @@ def _gemini_search(query: str) -> str:
         if hasattr(part, "text") and part.text:
             text += part.text
     if not text.strip():
-        raise ValueError("Empty response")
+        msg = "Empty response"
+        raise ValueError(msg)
     return text.strip()
 
 
@@ -72,19 +80,19 @@ def _compare(items: list, aspect: str) -> str:
     try:
         return _gemini_search(query)
     except Exception as e:
-        print(f"[WebSearch] ⚠️ Gemini compare failed: {e}")
+        logging.getLogger("WebSearch").warning(f"Gemini compare failed: {e}")
         all_results = {}
         for item in items:
             try:
                 all_results[item] = _ddg_search(f"{item} {aspect}", max_results=3)
             except Exception:
                 all_results[item] = []
-        lines = [f"Comparison — {aspect.upper()}\n{'─'*40}"]
+        lines = [f"Comparison -- {aspect.upper()}\n{'-'*40}"]
         for item in items:
-            lines.append(f"\n▸ {item}")
+            lines.append(f"\n> {item}")
             for r in all_results.get(item, [])[:2]:
                 if r.get("snippet"):
-                    lines.append(f"  • {r['snippet']}")
+                    lines.append(f"  * {r['snippet']}")
         return "\n".join(lines)
 
 
@@ -109,27 +117,27 @@ def web_search(
     if player:
         player.write_log(f"[Search] {query or ', '.join(items)}")
 
-    print(f"[WebSearch] 🔍 Query: {query!r}  Mode: {mode}")
+    logging.getLogger("WebSearch").info('Query: {query!r}  Mode: {mode}')
 
     try:
         if mode == "compare" and items:
-            print(f"[WebSearch] 📊 Comparing: {items}")
+            logging.getLogger("WebSearch").info('Comparing: {items}')
             result = _compare(items, aspect)
-            print("[WebSearch] ✅ Compare done.")
+            logging.getLogger("WebSearch").debug('Compare done.')
             return result
 
-        print("[WebSearch] 🌐 Gemini search...")
+        logging.getLogger("WebSearch").info('Gemini search...')
         try:
             result = _gemini_search(query)
-            print("[WebSearch] ✅ Gemini OK.")
+            logging.getLogger("WebSearch").debug('Gemini OK.')
             return result
         except Exception as e:
-            print(f"[WebSearch] ⚠️ Gemini failed ({e}), trying DDG...")
+            logging.getLogger("WebSearch").warning('Gemini failed ({e}), trying DDG...')
             results = _ddg_search(query)
             result  = _format_ddg(query, results)
-            print(f"[WebSearch] ✅ DDG: {len(results)} results.")
+            logging.getLogger("WebSearch").debug('DDG: {len(results)} results.')
             return result
 
     except Exception as e:
-        print(f"[WebSearch] ❌ Failed: {e}")
+        logging.getLogger("WebSearch").error('Failed: {e}')
         return f"Search failed, sir: {e}"

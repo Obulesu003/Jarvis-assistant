@@ -1,10 +1,11 @@
 # actions/open_app.py
-# MARK XXV — Cross-Platform App Launcher
+# MARK XXV -- Cross-Platform App Launcher
 
-import time
-import subprocess
+import logging  # migrated from print()
 import platform
 import shutil
+import subprocess
+import time
 
 try:
     import psutil
@@ -81,18 +82,56 @@ def _is_running(app_name: str) -> bool:
 
 
 def _launch_windows(app_name: str) -> bool:
+    # Try direct subprocess launch first (fast)
+    try:
+        # Map of known apps to their executables
+        KNOWN_APPS = {
+            "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "firefox": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+            "spotify": "C:\\Users\\bobul\\AppData\\Roaming\\Spotify\\Spotify.exe",
+            "discord": "C:\\Users\\bobul\\AppData\\Local\\Discord\\Update.exe",
+            "telegram": "C:\\Users\\bobul\\AppData\\Roaming\\Telegram Desktop\\Telegram.exe",
+            "vscode": "C:\\Users\\bobul\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+            "code": "C:\\Users\\bobul\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+            "notepad": "C:\\Windows\\notepad.exe",
+            "calc": "C:\\Windows\\System32\\calc.exe",
+            "explorer": "C:\\Windows\\explorer.exe",
+            "cmd": "C:\\Windows\\System32\\cmd.exe",
+            "powershell": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "task manager": "C:\\Windows\\System32\\Taskmgr.exe",
+            "msedge": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            "edge": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            "whatsapp": "C:\\Users\\bobul\\AppData\\Local\\WhatsApp\\WhatsApp.exe",
+            "steam": "C:\\Program Files (x86)\\Steam\\steam.exe",
+            "vlc": "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+        }
+        key = app_name.lower().replace(".exe", "")
+        exe_path = KNOWN_APPS.get(key)
+        if exe_path:
+            subprocess.Popen(
+                [exe_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logging.getLogger(__name__).info(f"[open_app] [WARN] Direct launch failed: {e}")
+
+    # Fallback: start menu search via shell
     try:
         import pyautogui
-        pyautogui.PAUSE = 0.1
+        pyautogui.PAUSE = 0.0
         pyautogui.press("win")
-        time.sleep(0.6)
+        time.sleep(0.3)
         pyautogui.write(app_name, interval=0.05)
-        time.sleep(0.8)
+        time.sleep(0.4)
         pyautogui.press("enter")
-        time.sleep(3.0)
+        time.sleep(1.5)
         return True
     except Exception as e:
-        print(f"[open_app] ⚠️ Windows launch failed: {e}")
+        logging.getLogger(__name__).info(f"[open_app] [WARN] GUI launch failed: {e}")
         return False
 
 def _launch_macos(app_name: str) -> bool:
@@ -122,7 +161,7 @@ def _launch_macos(app_name: str) -> bool:
         time.sleep(1.5)
         return True
     except Exception as e:
-        print(f"[open_app] ⚠️ macOS Spotlight failed: {e}")
+        logging.getLogger(__name__).info(f"[open_app] [WARN]️ macOS Spotlight failed: {e}")
         return False
 
 
@@ -182,7 +221,7 @@ def open_app(
         return f"Unsupported OS: {system}"
 
     normalized = _normalize(app_name)
-    print(f"[open_app] 🚀 Launching: {app_name} → {normalized} ({system})")
+    logging.getLogger(__name__).info('[open_app] [RUN] Launching: {app_name} -> {normalized} ({system})')
 
     if player:
         player.write_log(f"[open_app] {app_name}")
@@ -204,5 +243,5 @@ def open_app(
         )
 
     except Exception as e:
-        print(f"[open_app] ❌ {e}")
+        logging.getLogger(__name__).info('[open_app] [FAIL] {e}')
         return f"Failed to open {app_name}, sir: {e}"

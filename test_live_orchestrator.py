@@ -8,6 +8,7 @@ execute_action wraps them into strings. This means multi-step chaining
 via ${steps[N].result.field} needs structured step results from the
 _action_* methods, not execute_action output.
 """
+import logging  # migrated from print()
 import sys
 from pathlib import Path
 
@@ -42,10 +43,10 @@ def create_llm_orchestrator() -> LLMOrchestrator:
 
 def test_capabilities():
     """Verify all adapters register their capabilities."""
-    print("\n=== Test: Capabilities ===")
+    logging.getLogger(__name__).info('\\n=== Test: Capabilities ===')
     llm = create_llm_orchestrator()
     caps = llm._build_capability_prompt()
-    print(f"Adapters: {list(llm._orch._adapters.keys())}")
+    logging.getLogger(__name__).info('Adapters: {list(llm._orch._adapters.keys())}')
 
     # Must have clipboard
     assert "windows_app.read_clipboard" in caps, "read_clipboard missing"
@@ -54,12 +55,12 @@ def test_capabilities():
     assert "whatsapp.send_message" in caps, "whatsapp.send_message missing"
     # Must have outlook
     assert "outlook_native.get_unread_count" in caps, "outlook missing"
-    print(f"PASS: {caps.count(chr(10))} capability lines registered")
+    logging.getLogger(__name__).info('PASS: {caps.count(chr(10))} capability lines registered')
 
 
 def test_clipboard_write_and_read():
     """Test clipboard write then read back — full roundtrip."""
-    print("\n=== Test: Clipboard Roundtrip ===")
+    logging.getLogger(__name__).info('\\n=== Test: Clipboard Roundtrip ===')
     llm = create_llm_orchestrator()
 
     test_text = "MARK-XXXV TEST"
@@ -71,7 +72,7 @@ def test_clipboard_write_and_read():
         "params": {"text": test_text},
     })
     write_str = write_result  # execute_action returns string
-    print(f"Write: {write_str}")
+    logging.getLogger(__name__).info('Write: {write_str}')
     assert "Failed" not in write_str, f"Write failed: {write_str}"
 
     # Read back
@@ -81,78 +82,78 @@ def test_clipboard_write_and_read():
         "params": {"max_length": 5000},
     })
     read_str = read_result
-    print(f"Read:  {read_str}")
+    logging.getLogger(__name__).info('Read:  {read_str}')
     assert test_text in read_str, f"Expected '{test_text}' in '{read_str}'"
-    print("PASS: Clipboard roundtrip works")
+    logging.getLogger(__name__).info('PASS: Clipboard roundtrip works')
 
 
 def test_resolve_params_basic():
     """Test that _resolve_params works on plain params."""
-    print("\n=== Test: Resolve Params (no substitution) ===")
+    logging.getLogger(__name__).info('\\n=== Test: Resolve Params (no substitution) ===')
     llm = create_llm_orchestrator()
     params = {"email_id": "123", "body": "Hello world"}
     resolved = llm._resolve_params(params, [])
     assert resolved["email_id"] == "123"
     assert resolved["body"] == "Hello world"
-    print("PASS: Plain params pass through")
+    logging.getLogger(__name__).info('PASS: Plain params pass through')
 
 
 def test_resolve_params_with_dict_results():
     """Test that _resolve_params substitutes from dict results."""
-    print("\n=== Test: Resolve Params (dict results) ===")
+    logging.getLogger(__name__).info('\\n=== Test: Resolve Params (dict results) ===')
     llm = create_llm_orchestrator()
 
     # Results from _action_* methods are dicts
     results = [{"success": True, "email_id": "abc-123", "sender": "John"}]
     params = {"id": "${steps[0].result.email_id}"}
     resolved = llm._resolve_params(params, results)
-    print(f"Input: {params}")
-    print(f"Resolved: {resolved}")
+    logging.getLogger(__name__).info('Input: {params}')
+    logging.getLogger(__name__).info('Resolved: {resolved}')
     assert resolved["id"] == "abc-123", f"Got {resolved['id']}"
-    print("PASS: Dict substitution works")
+    logging.getLogger(__name__).info('PASS: Dict substitution works')
 
 
 def test_resolve_value_preserves_surrounding_text():
     """Test that _resolve_value replaces only the substitution, not whole string."""
-    print("\n=== Test: Resolve Value (surrounding text) ===")
+    logging.getLogger(__name__).info('\\n=== Test: Resolve Value (surrounding text) ===')
     llm = create_llm_orchestrator()
 
     results = [{"name": "Alice"}]
     value = "Hello ${steps[0].result.name}, how are you?"
     resolved = llm._resolve_value(value, results)
-    print(f"Input:  {value}")
-    print(f"Output: {resolved}")
+    logging.getLogger(__name__).info('Input:  {value}')
+    logging.getLogger(__name__).info('Output: {resolved}')
     assert resolved == "Hello Alice, how are you?", f"Got: {resolved}"
-    print("PASS: Surrounding text preserved")
+    logging.getLogger(__name__).info('PASS: Surrounding text preserved')
 
 
 def test_resolve_value_partial_replacement():
     """Test partial replacement in multi-substitution."""
-    print("\n=== Test: Resolve Value (multiple subs) ===")
+    logging.getLogger(__name__).info('\\n=== Test: Resolve Value (multiple subs) ===')
     llm = create_llm_orchestrator()
 
     results = [{"id": "xyz"}, {"extra": "data"}]
     params = {"to": "${steps[0].result.id}", "subject": "Re: ${steps[1].result.extra}"}
     resolved = llm._resolve_params(params, results)
-    print(f"Resolved: {resolved}")
+    logging.getLogger(__name__).info('Resolved: {resolved}')
     assert resolved["to"] == "xyz"
     assert resolved["subject"] == "Re: data"
-    print("PASS: Multiple substitutions work")
+    logging.getLogger(__name__).info('PASS: Multiple substitutions work')
 
 
 def test_auto_launch_whatsapp_map():
     """Test that WhatsApp is in the auto-launch map."""
-    print("\n=== Test: Auto-Launch Map ===")
+    logging.getLogger(__name__).info('\\n=== Test: Auto-Launch Map ===')
     llm = create_llm_orchestrator()
     assert "whatsapp" in llm.AUTO_LAUNCH_MAP
     assert llm.AUTO_LAUNCH_MAP["whatsapp"] == "https://web.whatsapp.com"
-    print(f"Auto-launch map: {llm.AUTO_LAUNCH_MAP}")
-    print("PASS: Auto-launch map configured")
+    logging.getLogger(__name__).info('Auto-launch map: {llm.AUTO_LAUNCH_MAP}')
+    logging.getLogger(__name__).info('PASS: Auto-launch map configured')
 
 
 def test_is_not_connected_detection():
     """Test that not-connected errors are correctly detected."""
-    print("\n=== Test: Not-Connected Detection ===")
+    logging.getLogger(__name__).info('\\n=== Test: Not-Connected Detection ===')
     llm = create_llm_orchestrator()
 
     triggers = [
@@ -170,17 +171,17 @@ def test_is_not_connected_detection():
         result = {"success": False, "error": error}
         detected = llm._is_not_connected_error(result)
         status = "PASS" if detected == exp else "FAIL"
-        print(f"  {status}: '{error[:50]}' -> {detected} (expected {exp})")
+        logging.getLogger(__name__).info("{status}: '{error[:50]}' -> {detected} (expected {exp})")
         if detected != exp:
             all_pass = False
 
     assert all_pass
-    print("PASS: Not-connected detection correct")
+    logging.getLogger(__name__).info('PASS: Not-connected detection correct')
 
 
 def test_results_summary_formats():
     """Test that results summary formats various result types."""
-    print("\n=== Test: Results Summary ===")
+    logging.getLogger(__name__).info('\\n=== Test: Results Summary ===')
     llm = create_llm_orchestrator()
 
     results = [
@@ -190,15 +191,15 @@ def test_results_summary_formats():
         {"success": False, "error": "Connection refused"},
     ]
     summary = llm._build_results_summary(results)
-    print(f"Summary:\n{summary}")
+    logging.getLogger(__name__).info('Summary:\\n{summary}')
     assert "Step 1:" in summary
     assert "Step 4:" in summary
-    print("PASS: Results summary formats correctly")
+    logging.getLogger(__name__).info('PASS: Results summary formats correctly')
 
 
 def test_execute_steps_handles_string_results():
     """Test that _execute_steps handles string results from execute_action."""
-    print("\n=== Test: Execute Steps (string results) ===")
+    logging.getLogger(__name__).info('\\n=== Test: Execute Steps (string results) ===')
     llm = create_llm_orchestrator()
 
     # First write something known
@@ -214,17 +215,17 @@ def test_execute_steps_handles_string_results():
         {"adapter": "windows_app", "action": "write_clipboard", "params": {"text": " CHAINED", "append": False}},
     ]
     results = llm._execute_steps(steps)
-    print(f"Step 0 result: {results[0]}")
-    print(f"Step 1 result: {results[1]}")
+    logging.getLogger(__name__).info('Step 0 result: {results[0]}')
+    logging.getLogger(__name__).info('Step 1 result: {results[1]}')
     assert len(results) == 2
     # Results are strings from execute_action
     assert "Failed" not in results[1], f"Step 1 should succeed: {results[1]}"
-    print("PASS: Multi-step execution works")
+    logging.getLogger(__name__).info('PASS: Multi-step execution works')
 
 
 def test_unknown_action_returns_error_string():
     """Test that unknown actions return an error string."""
-    print("\n=== Test: Unknown Action Error ===")
+    logging.getLogger(__name__).info('\\n=== Test: Unknown Action Error ===')
     llm = create_llm_orchestrator()
 
     result = llm._execute_steps([{
@@ -232,28 +233,28 @@ def test_unknown_action_returns_error_string():
         "action": "nonexistent_action",
         "params": {},
     }])
-    print(f"Result: {result[0]}")
+    logging.getLogger(__name__).info('Result: {result[0]}')
     assert "Unknown" in result[0] or "Failed" in result[0]
-    print("PASS: Unknown action handled")
+    logging.getLogger(__name__).info('PASS: Unknown action handled')
 
 
 def test_keyword_fallback_no_crash():
     """Test that keyword fallback doesn't crash (Gemini unavailable)."""
-    print("\n=== Test: Keyword Fallback ===")
+    logging.getLogger(__name__).info('\\n=== Test: Keyword Fallback ===')
     llm = create_llm_orchestrator()
 
     # Gemini unavailable → falls back to keyword matching
     result = llm.execute("how many unread emails do I have", {})
-    print(f"Result: {result[:150]}")
+    logging.getLogger(__name__).info('Result: {result[:150]}')
     assert isinstance(result, str)
     assert len(result) > 0
-    print("PASS: Keyword fallback works (Gemini unavailable -> keyword fallback)")
+    logging.getLogger(__name__).info('PASS: Keyword fallback works (Gemini unavailable -> keyword fallback)')
 
 
 def run_all_tests():
-    print("=" * 60)
-    print("MARK-XXXV LLM ORCHESTRATOR LIVE TESTS")
-    print("=" * 60)
+    logging.getLogger(__name__).info('=')
+    logging.getLogger(__name__).info('MARK-XXXV LLM ORCHESTRATOR LIVE TESTS')
+    logging.getLogger(__name__).info('=')
 
     tests = [
         test_capabilities,
@@ -278,16 +279,16 @@ def run_all_tests():
             test()
             passed += 1
         except Exception as e:
-            print(f"FAIL: {test.__name__}: {e}")
+            logging.getLogger(__name__).info('FAIL: {test.__name__}: {e}')
             import traceback
             traceback.print_exc()
             failed += 1
 
-    print("\n" + "=" * 60)
-    print(f"RESULTS: {passed} passed, {failed} failed")
+    logging.getLogger(__name__).info('\\n')
+    logging.getLogger(__name__).info('RESULTS: {passed} passed, {failed} failed')
     if failed == 0:
-        print("ALL TESTS PASSED!")
-    print("=" * 60)
+        logging.getLogger(__name__).info('ALL TESTS PASSED!')
+    logging.getLogger(__name__).info('=')
     return failed == 0
 
 

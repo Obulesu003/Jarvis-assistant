@@ -1,5 +1,5 @@
 # actions/flight_finder.py
-# MARK XXV — Flight Finder
+# MARK XXV -- Flight Finder
 #
 # Searches for flights using Google Flights via browser_control.
 # Results are spoken by JARVIS. Optionally saved to Notepad or opened in browser.
@@ -9,18 +9,19 @@
 #   2. Open Google Flights via browser_control
 #   3. Fill in search fields
 #   4. Scrape results via get_text
-#   5. Parse with Gemini → structured flight data
+#   5. Parse with Gemini -> structured flight data
 #   6. Speak top results
 #   7. Optionally save to Notepad or keep browser open
 #
 # Cross-platform: Windows, macOS, Linux
-# No API key required — Google Flights is free to access
+# No API key required -- Google Flights is free to access
 
+import logging  # migrated from print()
 import json
-import re
-import sys
-import subprocess
 import platform
+import re
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,12 +32,17 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    BASE_DIR = get_base_dir()
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
@@ -71,12 +77,12 @@ def _parse_date(raw: str) -> str:
             return val.strftime("%Y-%m-%d")
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=_get_api_key())
-        model    = genai.GenerativeModel("gemini-2.5-flash-lite")
+        from google.genai import Client
+        client = Client(api_key=_get_api_key())
         today_str = today.strftime("%Y-%m-%d")
-        response = model.generate_content(
-            f"Today is {today_str}. Convert this date to YYYY-MM-DD format: '{raw}'. "
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=f"Today is {today_str}. Convert this date to YYYY-MM-DD format: '{raw}'. "
             f"Return ONLY the date string, nothing else."
         )
         result = response.text.strip()
@@ -88,8 +94,7 @@ def _parse_date(raw: str) -> str:
     month_map = {
         "january": 1,  "february": 2,  "march": 3,     "april": 4,
         "may": 5,      "june": 6,      "july": 7,       "august": 8,
-        "september": 9,"october": 10,  "november": 11,  "december": 12,
-        "january": 1,  "ocak": 1,      "şubat": 2,      "mart": 3,
+        "september": 9,"october": 10,  "november": 11,  "december": 12,  "ocak": 1,      "şubat": 2,      "mart": 3,
         "nisan": 4,    "mayıs": 5,     "haziran": 6,    "temmuz": 7,
         "ağustos": 8,  "eylül": 9,     "ekim": 10,      "kasım": 11,
         "aralık": 12,
@@ -124,7 +129,7 @@ def _build_google_flights_url(
         "business": "3",
         "first":    "4",
     }
-    cabin_code = cabin_map.get(cabin.lower(), "1")
+    cabin_map.get(cabin.lower(), "1")
 
     base = "https://www.google.com/travel/flights"
 
@@ -156,16 +161,17 @@ def _search_flights_browser(
     Opens Google Flights in browser, waits for results, scrapes text.
     Returns (raw_text, page_url).
     """
-    from actions.browser_control import browser_control
     import time
+
+    from actions.browser_control import browser_control
 
     url = _build_google_flights_url(
         origin, destination, date, return_date, passengers, cabin
     )
 
-    print(f"[FlightFinder] 🌐 Opening: {url}")
+    logging.getLogger("FlightFinder").info(f"🌐 Opening: {url}")
     browser_control({"action": "go_to", "url": url})
-    time.sleep(5)  
+    time.sleep(5)
 
     result = browser_control({"action": "get_text"})
     return result or "", url
@@ -181,17 +187,10 @@ def _parse_flights_with_gemini(
     Sends raw page text to Gemini and extracts structured flight data.
     Returns list of flight dicts.
     """
-    import google.generativeai as genai
+    from google.genai import Client
+    from google.genai.types import GenerateContentConfig
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=(
-            "You are a flight data extraction expert. "
-            "Extract flight information from raw webpage text. "
-            "Return ONLY valid JSON array. No explanation, no markdown."
-        )
-    )
+    client = Client(api_key=_get_api_key())
 
     truncated = raw_text[:12000]
 
@@ -205,13 +204,23 @@ def _parse_flights_with_gemini(
     )
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=GenerateContentConfig(
+                system_instruction=(
+                    "You are a flight data extraction expert. "
+                    "Extract flight information from raw webpage text. "
+                    "Return ONLY valid JSON array. No explanation, no markdown."
+                )
+            )
+        )
         text     = response.text.strip()
         text     = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
         flights  = json.loads(text)
         return flights if isinstance(flights, list) else []
     except Exception as e:
-        print(f"[FlightFinder] ⚠️ Parse failed: {e}")
+        logging.getLogger("FlightFinder").warning('️ Parse failed: {e}')
         return []
 
 
@@ -222,7 +231,7 @@ def _format_spoken(
     destination: str,
     date:        str,
 ) -> str:
-    """Formats flights for spoken output — concise and natural."""
+    """Formats flights for spoken output -- concise and natural."""
     if not flights:
         return (
             f"I couldn't find any flights from {origin} to {destination} "
@@ -271,13 +280,13 @@ def _format_notepad(
     return_date: str | None,
     page_url:    str,
 ) -> str:
-    """Formats flights for Notepad — detailed and readable."""
+    """Formats flights for Notepad -- detailed and readable."""
     from datetime import datetime as dt
 
     lines = [
-        "JARVIS — Flight Search Results",
-        "─" * 50,
-        f"Route     : {origin} → {destination}",
+        "JARVIS -- Flight Search Results",
+        "-" * 50,
+        f"Route     : {origin} -> {destination}",
         f"Date      : {date}",
     ]
     if return_date:
@@ -285,7 +294,7 @@ def _format_notepad(
     lines += [
         f"Searched  : {dt.now().strftime('%Y-%m-%d %H:%M')}",
         f"Source    : {page_url}",
-        "─" * 50,
+        "-" * 50,
         "",
     ]
 
@@ -320,7 +329,7 @@ def _save_to_notepad(content: str, origin: str, destination: str) -> str:
     filepath = desktop / filename
 
     filepath.write_text(content, encoding="utf-8")
-    print(f"[FlightFinder] 💾 Saved: {filepath}")
+    logging.getLogger("FlightFinder").info('💾 Saved: {filepath}')
 
     system  = platform.system()
     open_fn = {
@@ -342,17 +351,17 @@ def flight_finder(
     speak=None,
 ) -> str:
     """
-    Flight Finder — searches Google Flights and speaks results.
+    Flight Finder -- searches Google Flights and speaks results.
 
     Parameters:
-        origin       (str, required) — departure city or airport (e.g. "Istanbul", "IST")
-        destination  (str, required) — arrival city or airport (e.g. "London", "LHR")
-        date         (str, required) — departure date (any format: "15 Mart", "March 15", "2025-03-15")
-        return_date  (str, optional) — return date for round trips
-        passengers   (int, optional) — number of passengers (default: 1)
-        cabin        (str, optional) — economy | premium | business | first (default: economy)
-        save         (bool, optional) — save results to Notepad (default: False)
-        show_browser (bool, optional) — keep browser open after search (default: True)
+        origin       (str, required) -- departure city or airport (e.g. "Istanbul", "IST")
+        destination  (str, required) -- arrival city or airport (e.g. "London", "LHR")
+        date         (str, required) -- departure date (any format: "15 Mart", "March 15", "2025-03-15")
+        return_date  (str, optional) -- return date for round trips
+        passengers   (int, optional) -- number of passengers (default: 1)
+        cabin        (str, optional) -- economy | premium | business | first (default: economy)
+        save         (bool, optional) -- save results to Notepad (default: False)
+        show_browser (bool, optional) -- keep browser open after search (default: True)
 
     Examples:
         flight_finder({"origin": "Istanbul", "destination": "London", "date": "15 Mart"})
@@ -378,15 +387,15 @@ def flight_finder(
     return_date = _parse_date(return_raw) if return_raw else None
 
     if player:
-        player.write_log(f"[FlightFinder] {origin} → {destination} on {date}")
+        player.write_log(f"[FlightFinder] {origin} -> {destination} on {date}")
 
     if speak:
         speak(f"Searching flights from {origin} to {destination} on {date}, sir.")
 
-    print(f"[FlightFinder] ▶️ {origin} → {destination} | {date} | {cabin} | {passengers} pax")
+    logging.getLogger("FlightFinder").info('️ {origin} -> {destination} | {date} | {cabin} | {passengers} pax')
 
     try:
-   
+
         raw_text, page_url = _search_flights_browser(
             origin, destination, date, return_date, passengers, cabin
         )
@@ -415,5 +424,5 @@ def flight_finder(
         return result
 
     except Exception as e:
-        print(f"[FlightFinder] ❌ Error: {e}")
+        logging.getLogger("FlightFinder").error('Error: {e}')
         return f"Flight search failed, sir: {e}"

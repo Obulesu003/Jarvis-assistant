@@ -2,20 +2,22 @@
 # AI-powered desktop & wallpaper management
 #
 # Flow for unknown tasks:
-#   User request → Gemini generates Python/pyautogui code → Safety check → Execute
+#   User request -> Gemini generates Python/pyautogui code -> Safety check -> Execute
 #
 # Built-in: wallpaper change, icon arrangement, desktop cleanup, organize by type
 
-import os
-import sys
+import logging  # migrated from print()
+import ctypes
 import json
+import os
 import shutil
 import subprocess
-import ctypes
+import sys
 import tempfile
-import pyautogui
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import pyautogui
 
 
 def get_base_dir():
@@ -23,12 +25,17 @@ def get_base_dir():
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
-
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    BASE_DIR = get_base_dir()
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
@@ -59,10 +66,10 @@ def _ask_gemini_for_desktop_action(task: str) -> str:
     Asks Gemini to generate safe Python/pyautogui code
     to accomplish a desktop-related task.
     """
-    import google.generativeai as genai
+    from google.genai import Client
+    from google.genai.types import GenerateContentConfig
 
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = Client(api_key=_get_api_key())
 
     desktop = str(_get_desktop())
 
@@ -91,7 +98,10 @@ Task: {task}
 Python code:"""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
         code = response.text.strip()
         if code.startswith("```"):
             lines = code.split("\n")
@@ -164,15 +174,14 @@ def set_wallpaper(image_path: str) -> str:
             ctypes.windll.user32.SystemParametersInfoW(20, 0, abs_path, 3)
             return f"Wallpaper set: {path.name}"
 
-        elif sys.platform == "darwin":
+        if sys.platform == "darwin":
             script = f'tell application "Finder" to set desktop picture to POSIX file "{path}"'
             subprocess.run(["osascript", "-e", script])
             return f"Wallpaper set: {path.name}"
 
-        else:
-            subprocess.run(["gsettings", "set", "org.gnome.desktop.background",
-                          "picture-uri", f"file://{path}"])
-            return f"Wallpaper set: {path.name}"
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.background",
+                      "picture-uri", f"file://{path}"])
+        return f"Wallpaper set: {path.name}"
 
     except Exception as e:
         return f"Could not set wallpaper: {e}"
@@ -185,8 +194,7 @@ def set_wallpaper_from_web(url: str) -> str:
         suffix = Path(url.split("?")[0]).suffix or ".jpg"
         tmp    = Path(tempfile.mktemp(suffix=suffix))
         urllib.request.urlretrieve(url, str(tmp))
-        result = set_wallpaper(str(tmp))
-        return result
+        return set_wallpaper(str(tmp))
     except Exception as e:
         return f"Could not download wallpaper: {e}"
 
@@ -200,8 +208,7 @@ def get_current_wallpaper() -> str:
                                   r"Control Panel\Desktop")
             val, _ = winreg.QueryValueEx(key, "Wallpaper")
             return f"Current wallpaper: {val}"
-        else:
-            return "Wallpaper path retrieval not supported on this OS."
+        return "Wallpaper path retrieval not supported on this OS."
     except Exception as e:
         return f"Could not get wallpaper: {e}"
 
@@ -220,8 +227,8 @@ FILE_TYPE_MAP = {
 def organize_desktop(mode: str = "by_type") -> str:
     """
     Organizes desktop files.
-    mode: 'by_type' — groups by file type (Images, Documents, etc.)
-          'by_date'  — groups by month (2024-01, 2024-02, etc.)
+    mode: 'by_type' -- groups by file type (Images, Documents, etc.)
+          'by_date'  -- groups by month (2024-01, 2024-02, etc.)
     """
     desktop = _get_desktop()
     moved   = []
@@ -254,7 +261,7 @@ def organize_desktop(mode: str = "by_type") -> str:
             continue
 
         shutil.move(str(item), str(new_path))
-        moved.append(f"{item.name} → {folder_name}/")
+        moved.append(f"{item.name} -> {folder_name}/")
 
     result = f"Desktop organized ({mode}). {len(moved)} files moved."
     if moved:
@@ -291,7 +298,7 @@ def list_desktop() -> str:
 def clean_desktop() -> str:
     """
     Moves all files on desktop into a 'Desktop Archive' folder
-    with today's date — fast cleanup without deleting anything.
+    with today's date -- fast cleanup without deleting anything.
     """
     desktop     = _get_desktop()
     today       = datetime.now().strftime("%Y-%m-%d")
@@ -340,7 +347,7 @@ def desktop_control(
     parameters:
         action      : wallpaper | wallpaper_url | current_wallpaper |
                       organize | clean | list | stats |
-                      task (AI-powered — anything else)
+                      task (AI-powered -- anything else)
 
         path        : image path for 'wallpaper'
         url         : image URL for 'wallpaper_url'
@@ -385,7 +392,7 @@ def desktop_control(
             if not actual_task:
                 return "Please describe what you want to do on the desktop, sir."
 
-            print(f"[Desktop] 🤖 Asking Gemini: {actual_task}")
+            logging.getLogger("Desktop").info(f"🤖 Asking Gemini: {actual_task}")
             if player:
                 player.write_log("[Desktop] Generating action...")
 
@@ -396,7 +403,7 @@ def desktop_control(
             elif code.startswith("ERROR:"):
                 result = f"Could not generate action: {code}"
             else:
-                print(f"[Desktop] ✅ Generated code:\n{code[:200]}")
+                logging.getLogger("Desktop").debug(f"Generated code:\n{code[:200]}")
                 result = _execute_generated_code(code)
 
         else:
@@ -410,7 +417,7 @@ def desktop_control(
     except Exception as e:
         result = f"Desktop control error: {e}"
 
-    print(f"[Desktop] {result[:100]}")
+    logging.getLogger("Desktop").info(f"{result[:100]}")
     if player:
         player.write_log(f"[desktop] {result[:60]}")
 

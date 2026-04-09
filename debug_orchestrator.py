@@ -63,30 +63,30 @@ TEST_QUERIES = [
 
 
 def run_query(llm: LLMOrchestrator, query: str):
-    print(f"\n{'='*70}")
-    print(f"QUERY: {query}")
-    print(f"{'='*70}")
+    logging.getLogger(__name__).info("\\n{'='*70}")
+    logging.getLogger(__name__).info(f'QUERY: {query}')
+    logging.getLogger(__name__).info("{'='*70}")
     try:
         result = llm.execute(query, {})
-        print(f"\nRESULT: {result}")
+        logging.getLogger(__name__).info(f'\\nRESULT: {result}')
     except Exception as e:
-        print(f"\nERROR: {e}")
+        logging.getLogger(__name__).info(f'\\nERROR: {e}')
         import traceback
         traceback.print_exc()
-    print()
+    logger.debug()
 
 
 def main():
-    print("MARK-XXXV LLM ORCHESTRATOR DEBUG RUNNER")
-    print("=" * 70)
-    print("NOTE: Gemini API unavailable = keyword fallback routing only.")
-    print("      With a valid Gemini key, LLM-powered routing would activate.")
-    print("=" * 70)
+    logging.getLogger(__name__).info('MARK-XXXV LLM ORCHESTRATOR DEBUG RUNNER')
+    logging.getLogger(__name__).info('=')
+    logging.getLogger(__name__).info('NOTE: Gemini API unavailable = keyword fallback routing only.')
+    logging.getLogger(__name__).info('With a valid Gemini key, LLM-powered routing would activate.')
+    logging.getLogger(__name__).info('=')
 
     llm = create_orchestrator()
 
-    print(f"\nAdapters registered: {list(llm._orch._adapters.keys())}")
-    print(f"Capabilities: {llm._build_capability_prompt().count(chr(10))} actions")
+    logging.getLogger(__name__).info(f'\\nAdapters registered: {list(llm._orch._adapters.keys())}')
+    logging.getLogger(__name__).info('Capabilities: {llm._build_capability_prompt().count(chr(10))} actions')
 
     for query in TEST_QUERIES:
         run_query(llm, query)

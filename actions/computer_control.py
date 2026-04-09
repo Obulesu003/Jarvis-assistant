@@ -1,5 +1,5 @@
 # actions/computer_control.py
-# MARK XXV — Computer Control
+# MARK XXV -- Computer Control
 #
 # Atomic computer control functions using PyAutoGUI + keyboard + clipboard.
 # Used by the agent when no existing action file covers the task.
@@ -17,13 +17,14 @@
 #   - Hotkey sequences
 #   - Find and click image/element on screen
 
+import logging  # migrated from print()
 import json
-import sys
-import time
+import platform
 import random
 import string
 import subprocess
-import platform
+import sys
+import time
 from pathlib import Path
 
 try:
@@ -47,8 +48,20 @@ def get_base_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
+
+BASE_DIR = get_base_dir()
+
+def _get_api_key() -> str:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    import json
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
+        return json.load(f)["gemini_api_key"]
 
 
 def _load_user_profile() -> dict:
@@ -71,8 +84,9 @@ def _load_user_profile() -> dict:
 
 def _ensure_pyautogui():
     if not _PYAUTOGUI:
+        msg = "PyAutoGUI not installed. Run: pip install pyautogui"
         raise RuntimeError(
-            "PyAutoGUI not installed. Run: pip install pyautogui"
+            msg
         )
 
 
@@ -99,24 +113,24 @@ def generate_random_data(data_type: str) -> str:
     if dt == "first_name":
         return random.choice(_FIRST_NAMES)
 
-    elif dt == "last_name":
+    if dt == "last_name":
         return random.choice(_LAST_NAMES)
 
-    elif dt == "name":
+    if dt == "name":
         return f"{random.choice(_FIRST_NAMES)} {random.choice(_LAST_NAMES)}"
 
-    elif dt == "email":
+    if dt == "email":
         first = random.choice(_FIRST_NAMES).lower()
         last  = random.choice(_LAST_NAMES).lower()
         num   = random.randint(10, 999)
         return f"{first}.{last}{num}@{random.choice(_DOMAINS)}"
 
-    elif dt == "username":
+    if dt == "username":
         first = random.choice(_FIRST_NAMES).lower()
         num   = random.randint(100, 9999)
         return f"{first}{num}"
 
-    elif dt == "password":
+    if dt == "password":
         chars = string.ascii_letters + string.digits + "!@#$%"
         pwd   = (
             random.choice(string.ascii_uppercase) +
@@ -126,24 +140,24 @@ def generate_random_data(data_type: str) -> str:
         )
         return "".join(random.sample(pwd, len(pwd)))
 
-    elif dt == "phone":
+    if dt == "phone":
         return f"+1{random.randint(200,999)}{random.randint(1000000,9999999)}"
 
-    elif dt == "birthday":
+    if dt == "birthday":
         year  = random.randint(1980, 2000)
         month = random.randint(1, 12)
         day   = random.randint(1, 28)
         return f"{month:02d}/{day:02d}/{year}"
 
-    elif dt == "address":
+    if dt == "address":
         num    = random.randint(100, 9999)
         street = random.choice(["Main St", "Oak Ave", "Park Blvd", "Elm St", "Cedar Ln"])
         return f"{num} {street}"
 
-    elif dt == "zip_code":
+    if dt == "zip_code":
         return str(random.randint(10000, 99999))
 
-    elif dt == "city":
+    if dt == "city":
         return random.choice(["New York", "Los Angeles", "Chicago", "Houston", "Phoenix"])
 
     return f"random_{data_type}_{random.randint(1000,9999)}"
@@ -157,8 +171,8 @@ def _type_text(text: str, interval: float = 0.03) -> str:
     return f"Typed: {text[:50]}{'...' if len(text) > 50 else ''}"
 
 
-def _click(x: int = None, y: int = None, button: str = "left",
-           clicks: int = 1, image: str = None) -> str:
+def _click(x: int | None = None, y: int | None = None, button: str = "left",
+           clicks: int = 1, image: str | None = None) -> str:
     """
     Clicks at coordinates or on a screen image.
     If image path given, locates it on screen and clicks.
@@ -180,7 +194,7 @@ def _click(x: int = None, y: int = None, button: str = "left",
         return f"Clicked ({x}, {y}) with {button} button"
 
     pyautogui.click(button=button, clicks=clicks)
-    return f"Clicked at current position"
+    return "Clicked at current position"
 
 
 def _hotkey(*keys) -> str:
@@ -242,7 +256,7 @@ def _clipboard_set(text: str) -> str:
     return "pyperclip not available"
 
 
-def _screenshot(save_path: str = None) -> str:
+def _screenshot(save_path: str | None = None) -> str:
     """Takes a screenshot."""
     _ensure_pyautogui()
     if not save_path:
@@ -301,7 +315,7 @@ def _select_all() -> str:
 
 
 def _clear_field() -> str:
-    """Selects all and deletes — clears an input field."""
+    """Selects all and deletes -- clears an input field."""
     _hotkey("ctrl", "a")
     time.sleep(0.1)
     _press("delete")
@@ -325,9 +339,8 @@ def _smart_type(text: str, clear_first: bool = True) -> str:
         time.sleep(0.1)
         pyautogui.hotkey("ctrl", "v")
         return f"Smart-typed (clipboard): {text[:50]}"
-    else:
-        pyautogui.typewrite(text, interval=0.04)
-        return f"Smart-typed: {text[:50]}"
+    pyautogui.typewrite(text, interval=0.04)
+    return f"Smart-typed: {text[:50]}"
 
 
 def _analyze_screen_for_element(description: str) -> tuple[int, int] | None:
@@ -336,16 +349,12 @@ def _analyze_screen_for_element(description: str) -> tuple[int, int] | None:
     of a described element on screen. Returns (x, y) or None.
     """
     try:
-        import google.generativeai as genai
         import io
 
-        cfg_path = API_CONFIG_PATH
-        with open(cfg_path, "r") as f:
-            api_key = json.load(f)["gemini_api_key"]
+        from google.genai import Client
+        from google.genai import types
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
-
+        client = Client(api_key=_get_api_key())
 
         _ensure_pyautogui()
         w, h  = pyautogui.size()
@@ -361,10 +370,13 @@ def _analyze_screen_for_element(description: str) -> tuple[int, int] | None:
             f"If not found, return: NOT_FOUND"
         )
 
-        response = model.generate_content([
-            {"mime_type": "image/png", "data": buf.getvalue()},
-            prompt
-        ])
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[
+                types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
+                types.Content(parts=[types.Part.from_text(prompt)]),
+            ]
+        )
 
         text = response.text.strip()
         if "NOT_FOUND" in text:
@@ -376,7 +388,7 @@ def _analyze_screen_for_element(description: str) -> tuple[int, int] | None:
             return int(match.group(1)), int(match.group(2))
 
     except Exception as e:
-        print(f"[ComputerControl] ⚠️ Screen analysis failed: {e}")
+        logging.getLogger("ComputerControl").warning(f"️ Screen analysis failed: {e}")
 
     return None
 
@@ -407,7 +419,7 @@ def computer_control(
       wait_image    : Wait for image to appear on screen
       clear_field   : Select all + delete in current field
       focus_window  : Bring window to foreground
-      screen_find   : AI-powered element finder — returns coordinates
+      screen_find   : AI-powered element finder -- returns coordinates
       screen_click  : AI-powered element finder + click
       random_data   : Generate random data for forms
       user_data     : Get user's real data from memory
@@ -420,19 +432,19 @@ def computer_control(
     if player:
         player.write_log(f"[Computer] {action}")
 
-    print(f"[ComputerControl] ▶️ Action: {action}  Params: {parameters}")
+    logging.getLogger("ComputerControl").info('️ Action: {action}  Params: {parameters}')
 
     try:
         if action == "type":
             text = parameters.get("text", "")
             return _type_text(text)
 
-        elif action == "smart_type":
+        if action == "smart_type":
             text        = parameters.get("text", "")
             clear_first = parameters.get("clear_first", True)
             return _smart_type(text, clear_first=clear_first)
-        
-        elif action in ("click", "left_click"):
+
+        if action in ("click", "left_click"):
             return _click(
                 x=parameters.get("x"),
                 y=parameters.get("y"),
@@ -441,7 +453,7 @@ def computer_control(
                 image=parameters.get("image")
             )
 
-        elif action == "double_click":
+        if action == "double_click":
             return _click(
                 x=parameters.get("x"),
                 y=parameters.get("y"),
@@ -450,7 +462,7 @@ def computer_control(
                 image=parameters.get("image")
             )
 
-        elif action == "right_click":
+        if action == "right_click":
             return _click(
                 x=parameters.get("x"),
                 y=parameters.get("y"),
@@ -458,14 +470,14 @@ def computer_control(
                 clicks=1
             )
 
-        elif action == "move":
+        if action == "move":
             return _move_mouse(
                 x=int(parameters.get("x", 0)),
                 y=int(parameters.get("y", 0)),
                 duration=float(parameters.get("duration", 0.3))
             )
 
-        elif action == "drag":
+        if action == "drag":
             return _drag(
                 x1=int(parameters.get("x1", 0)),
                 y1=int(parameters.get("y1", 0)),
@@ -473,56 +485,56 @@ def computer_control(
                 y2=int(parameters.get("y2", 0))
             )
 
-        elif action == "hotkey":
+        if action == "hotkey":
             keys = parameters.get("keys", "")
             if isinstance(keys, str):
                 keys = [k.strip() for k in keys.split("+")]
             return _hotkey(*keys)
 
-        elif action == "press":
+        if action == "press":
             return _press(parameters.get("key", "enter"))
 
-        elif action == "scroll":
+        if action == "scroll":
             return _scroll(
                 direction=parameters.get("direction", "down"),
                 amount=int(parameters.get("amount", 3))
             )
 
-        elif action == "copy":
+        if action == "copy":
             return _clipboard_copy()
 
-        elif action == "paste":
+        if action == "paste":
             return _clipboard_set(parameters.get("text", ""))
 
-        elif action == "screenshot":
+        if action == "screenshot":
             return _screenshot(parameters.get("path"))
 
-        elif action == "wait":
+        if action == "wait":
             return _wait(float(parameters.get("seconds", 1.0)))
 
-        elif action == "wait_image":
+        if action == "wait_image":
             return _wait_for_image(
                 parameters.get("image", ""),
                 timeout=int(parameters.get("timeout", 10))
             )
 
-        elif action == "clear_field":
+        if action == "clear_field":
             return _clear_field()
 
-        elif action == "focus_window":
+        if action == "focus_window":
             return _focus_window(parameters.get("title", ""))
 
-        elif action == "screen_size":
+        if action == "screen_size":
             return _get_screen_size()
 
-        elif action == "screen_find":
+        if action == "screen_find":
             description = parameters.get("description", "")
             coords = _analyze_screen_for_element(description)
             if coords:
                 return f"{coords[0]},{coords[1]}"
             return "NOT_FOUND"
 
-        elif action == "screen_click":
+        if action == "screen_click":
             description = parameters.get("description", "")
             coords = _analyze_screen_for_element(description)
             if coords:
@@ -531,24 +543,23 @@ def computer_control(
                 return f"Found and clicked: {description} at {coords}"
             return f"Could not find on screen: {description}"
 
-        elif action == "random_data":
+        if action == "random_data":
             data_type = parameters.get("type", "name")
             result    = generate_random_data(data_type)
-            print(f"[ComputerControl] 🎲 Random {data_type}: {result}")
+            logging.getLogger("ComputerControl").info('🎲 Random {data_type}: {result}')
             return result
 
-        elif action == "user_data":
+        if action == "user_data":
             field   = parameters.get("field", "name")
             profile = _load_user_profile()
             value   = profile.get(field, "")
             if not value:
                 value = generate_random_data(field)
-                print(f"[ComputerControl] ⚠️ No user {field} in memory, using random: {value}")
+                logging.getLogger("ComputerControl").warning('️ No user {field} in memory, using random: {value}')
             return value
 
-        else:
-            return f"Unknown computer_control action: '{action}'"
+        return f"Unknown computer_control action: '{action}'"
 
     except Exception as e:
-        print(f"[ComputerControl] ❌ Error: {e}")
+        logging.getLogger("ComputerControl").error('Error: {e}')
         return f"computer_control failed: {e}"

@@ -1,3 +1,4 @@
+import logging  # migrated from print()
 import json
 import re
 import sys
@@ -38,9 +39,9 @@ def _load_plan_cache() -> None:
                 plan = entry.get("plan")
                 if plan:
                     _PLAN_CACHE[key] = (plan, entry.get("_ts", 0))
-        print(f"[Planner] [CACHE] Loaded {len(_PLAN_CACHE)} cached plans")
+        logging.getLogger("Planner").info(f"Loaded {len(_PLAN_CACHE)} cached plans")
     except Exception as e:
-        print(f"[Planner] [CACHE] Load failed: {e}")
+        logging.getLogger("Planner").info(f'Load failed: {e}')
 
 
 def _save_plan_cache() -> None:
@@ -50,7 +51,7 @@ def _save_plan_cache() -> None:
         data = {k: {"plan": v[0], "_ts": v[1]} for k, v in _PLAN_CACHE.items()}
         _PLAN_CACHE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception as e:
-        print(f"[Planner] [CACHE] Save failed: {e}")
+        logging.getLogger("Planner").info(f'Save failed: {e}')
 
 
 def _make_cache_key(goal: str) -> str:
@@ -71,7 +72,7 @@ def _get_cached_plan(goal: str) -> dict | None:
         if time.time() - cached_at > _PLAN_CACHE_TTL:
             del _PLAN_CACHE[key]
             return None
-        print(f"[Planner] [CACHE] HIT  key={goal[:60]}")
+        logging.getLogger("Planner").info(f'HIT  key={goal[:60]}')
         return plan
 
 
@@ -364,29 +365,29 @@ def create_plan(goal: str, context: str = "") -> dict:
 
         for step in plan["steps"]:
             if step.get("tool") in ("generated_code",):
-                print(f"[Planner] WARN generated_code detected in step {step.get('step')} -- replacing with web_search")
+                logging.getLogger("Planner").info("WARN generated_code detected in step {step.get('step')} -- replacing with web_search")
                 desc = step.get("description", goal)
                 step["tool"] = "web_search"
                 step["parameters"] = {"query": desc[:200]}
 
-        print(f"[Planner] OK Plan: {len(plan['steps'])} steps")
+        logging.getLogger("Planner").info("OK Plan: {len(plan['steps'])} steps")
         for s in plan["steps"]:
-            print(f"  Step {s['step']}: [{s['tool']}] {s['description']}")
+            logging.getLogger(__name__).info("Step {s['step']}: [{s['tool']}] {s['description']}")
 
         # Cache the successful plan
         _set_cached_plan(goal, plan)
         return plan
 
     except json.JSONDecodeError as e:
-        print(f"[Planner] WARN JSON parse failed: {e}")
+        logging.getLogger("Planner").info(f'WARN JSON parse failed: {e}')
         return _fallback_plan(goal)
     except Exception as e:
-        print(f"[Planner] WARN Planning failed: {e}")
+        logging.getLogger("Planner").info(f'WARN Planning failed: {e}')
         return _fallback_plan(goal)
 
 
 def _fallback_plan(goal: str) -> dict:
-    print("[Planner] RETRY Fallback plan")
+    logging.getLogger("Planner").info('RETRY Fallback plan')
     return {
         "goal": goal,
         "steps": [
@@ -436,8 +437,8 @@ Create a REVISED plan for the remaining work only. Do not repeat completed steps
                 step["tool"] = "web_search"
                 step["parameters"] = {"query": step.get("description", goal)[:200]}
 
-        print(f"[Planner] RETRY Revised plan: {len(plan['steps'])} steps")
+        logging.getLogger("Planner").info(f"RETRY Revised plan: {len(plan['steps'])} steps")
         return plan
     except Exception as e:
-        print(f"[Planner] WARN Replan failed: {e}")
+        logging.getLogger("Planner").info(f'WARN Replan failed: {e}')
         return _fallback_plan(goal)

@@ -1,18 +1,19 @@
+import logging  # migrated from print()
 import asyncio
 import base64
 import io
 import json
 import re
-import os
 import sys
-import time
 import threading
+import time
+import traceback
+from pathlib import Path
+
 import cv2
 import mss
 import mss.tools
 import sounddevice as sd
-import numpy as np
-from pathlib import Path
 
 try:
     import PIL.Image
@@ -23,13 +24,26 @@ except ImportError:
 from google import genai
 from google.genai import types
 
+
 def get_base_dir():
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
+
+BASE_DIR = get_base_dir()
+
+def _get_api_key() -> str:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    import json
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
+        return json.load(f)["gemini_api_key"]
 
 LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 CHANNELS            = 1
@@ -43,7 +57,7 @@ JPEG_Q    = 55
 SYSTEM_PROMPT = (
     "You are JARVIS from Iron Man movies. "
     "Analyze images with technical precision and intelligence. "
-    "Help the user in a way they can understand — don't be overly complex. "
+    "Help the user in a way they can understand -- don't be overly complex. "
     "Be concise, smart, and helpful like Tony Stark's AI assistant. "
     "Respond in maximum 2 short sentences. Speed is priority. "
     "Address the user as 'sir' for a tone of respect. "
@@ -51,28 +65,17 @@ SYSTEM_PROMPT = (
 )
 
 
-def _get_api_key() -> str:
-    try:
-        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-            keys = json.load(f)
-        key = keys.get("gemini_api_key", "")
-        if not key:
-            raise ValueError("gemini_api_key not found")
-        return key
-    except Exception as e:
-        raise RuntimeError(f"Could not load API key: {e}")
-
-
 def _get_camera_index() -> int:
+    cfg_path = BASE_DIR / "config" / "api_keys.json"
     try:
-        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(cfg_path, encoding="utf-8") as f:
             cfg = json.load(f)
         if "camera_index" in cfg:
             return int(cfg["camera_index"])
     except Exception:
         pass
 
-    print("[Camera] 🔍 No camera index in config. Auto-detecting...")
+    logging.getLogger("Camera").info('🔍 No camera index in config. Auto-detecting...')
     best_index = 0
 
     for idx in range(6):
@@ -86,22 +89,22 @@ def _get_camera_index() -> int:
         cap.release()
         if ret and frame is not None and frame.mean() > 5:
             best_index = idx
-            print(f"[Camera] ✅ Camera found at index {idx} — saving to config.")
+            logging.getLogger("Camera").debug('Camera found at index {idx} -- saving to config.')
             break
-        else:
-            print(f"[Camera] ⚠️  Index {idx}: no valid frame.")
+        logging.getLogger("Camera").warning('️  Index {idx}: no valid frame.')
 
     try:
         cfg = {}
-        if API_CONFIG_PATH.exists():
-            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg_path = BASE_DIR / "config" / "api_keys.json"
+        if cfg_path.exists():
+            with open(cfg_path, encoding="utf-8") as f:
                 cfg = json.load(f)
         cfg["camera_index"] = best_index
-        with open(API_CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)
-        print(f"[Camera] 💾 Camera index {best_index} saved to config.")
+        logging.getLogger("Camera").info('💾 Camera index {best_index} saved to config.')
     except Exception as e:
-        print(f"[Camera] ⚠️  Could not save camera index: {e}")
+        logging.getLogger("Camera").warning(f"️  Could not save camera index: {e}")
 
     return best_index
 
@@ -127,13 +130,15 @@ def _capture_camera() -> bytes:
     camera_index = _get_camera_index()
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        raise RuntimeError(f"Camera could not be opened: index {camera_index}")
+        msg = f"Camera could not be opened: index {camera_index}"
+        raise RuntimeError(msg)
     for _ in range(10):
         cap.read()
     ret, frame = cap.read()
     cap.release()
     if not ret or frame is None:
-        raise RuntimeError("Could not capture camera frame.")
+        msg = "Could not capture camera frame."
+        raise RuntimeError(msg)
     if _PIL_OK:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = PIL.Image.fromarray(rgb)
@@ -167,8 +172,9 @@ class _LiveSession:
         self._thread.start()
         ok = self._ready.wait(timeout=20)
         if not ok:
-            raise RuntimeError("Vision session did not start within 20s.")
-        print("[ScreenProcess] ✅ Vision session ready (no mic)")
+            msg = "Vision session did not start within 20s."
+            raise RuntimeError(msg)
+        logging.getLogger("ScreenProcess").debug('Vision session ready (no mic)')
 
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
@@ -200,17 +206,17 @@ class _LiveSession:
 
         while True:
             try:
-                print("[ScreenProcess] 🔌 Vision session connecting...")
+                logging.getLogger("ScreenProcess").info('🔌 Vision session connecting...')
                 async with client.aio.live.connect(model=LIVE_MODEL, config=config) as session:
                     self._session = session
                     self._ready.set()
-                    print("[ScreenProcess] ✅ Vision session connected")
+                    logging.getLogger("ScreenProcess").debug('Vision session connected')
                     async with asyncio.TaskGroup() as tg:
                         tg.create_task(self._send_loop())
                         tg.create_task(self._recv_loop())
                         tg.create_task(self._play_loop())
             except Exception as e:
-                print(f"[ScreenProcess] ⚠️ Disconnected: {e} — reconnecting...")
+                logging.getLogger("ScreenProcess").warning('️ Disconnected: {e} -- reconnecting...')
                 self._session = None
                 self._ready.clear()
                 await asyncio.sleep(2)
@@ -232,9 +238,9 @@ class _LiveSession:
                         },
                         turn_complete=True
                     )
-                    print("[ScreenProcess] ✅ Image sent")
+                    logging.getLogger("ScreenProcess").debug('Image sent')
                 except Exception as e:
-                    print(f"[ScreenProcess] ⚠️ Send error: {e}")
+                    logging.getLogger("ScreenProcess").warning('️ Send error: {e}')
 
     async def _recv_loop(self):
         transcript_buf: list[str] = []
@@ -254,10 +260,10 @@ class _LiveSession:
                         full = re.sub(r'\s+', ' ', " ".join(transcript_buf)).strip()
                         if full:
                             self._player.write_log(f"Jarvis: {full}")
-                            print(f"[ScreenProcess] 💬 {full}")
+                            logging.getLogger("ScreenProcess").info('💬 {full}')
                     transcript_buf = []
         except Exception as e:
-            print(f"[ScreenProcess] ⚠️ Recv error: {e}")
+            logging.getLogger("ScreenProcess").warning('️ Recv error: {e}')
             transcript_buf = []
             await asyncio.sleep(0.3)
 
@@ -274,7 +280,7 @@ class _LiveSession:
                 chunk = await self._audio_in.get()
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
-            print(f"[ScreenProcess] ❌ Play error: {e}")
+            logging.getLogger("ScreenProcess").error('Play error: {e}')
             raise
         finally:
             stream.stop()
@@ -316,11 +322,11 @@ def screen_process(
     user_text = (parameters or {}).get("text") or (parameters or {}).get("user_text", "")
     user_text = (user_text or "").strip()
     if not user_text:
-        print("[ScreenProcess] ⚠️ No user_text provided.")
+        logging.getLogger("ScreenProcess").warning('️ No user_text provided.')
         return False
 
     angle = (parameters or {}).get("angle", "screen").lower().strip()
-    print(f"[ScreenProcess] angle={angle!r}  text={user_text!r}")
+    logging.getLogger("ScreenProcess").info('angle={angle!r}  text={user_text!r}')
 
     _ensure_started(player=player)
 
@@ -328,17 +334,17 @@ def screen_process(
         if angle == "camera":
             image_bytes = _capture_camera()
             mime_type   = "image/jpeg"
-            print("[ScreenProcess] 📷 Camera captured")
+            logging.getLogger("ScreenProcess").info('📷 Camera captured')
         else:
             image_bytes = _capture_screenshot()
             mime_type   = "image/jpeg" if _PIL_OK else "image/png"
-            print("[ScreenProcess] 🖥️ Screen captured")
+            logging.getLogger("ScreenProcess").info('🖥️ Screen captured')
     except Exception as e:
-        import traceback; traceback.print_exc()
-        print(f"[ScreenProcess] ❌ Capture error: {e}")
+        traceback.print_exc()
+        logging.getLogger("ScreenProcess").error('Capture error: {e}')
         return False
 
-    print(f"[ScreenProcess] 📦 {len(image_bytes)} bytes → sending")
+    logging.getLogger("ScreenProcess").info('📦 {len(image_bytes)} bytes -> sending')
     _live.analyze(image_bytes, mime_type, user_text)
     return True
 
@@ -347,21 +353,21 @@ def warmup_session(player=None):
     try:
         _ensure_started(player=player)
     except Exception as e:
-        print(f"[ScreenProcess] ⚠️ Warmup error: {e}")
+        logging.getLogger("ScreenProcess").warning('️ Warmup error: {e}')
 
 
 if __name__ == "__main__":
-    print("[TEST] screen_processor.py v8 — image-only session")
-    print("=" * 50)
+    logging.getLogger("TEST").info('screen_processor.py v8 -- image-only session')
+    logging.getLogger(__name__).info('=')
     mode    = input("screen / camera (default: screen): ").strip().lower() or "screen"
     request = input("Question (Enter for default): ").strip() or "What do you see? Be brief."
 
     t0 = time.perf_counter()
     warmup_session()
-    print(f"Session ready — {time.perf_counter()-t0:.2f}s\n")
+    logging.getLogger(__name__).info('Session ready -- {time.perf_counter()-t0:.2f}s\\n')
 
     t1     = time.perf_counter()
     result = screen_process({"angle": mode, "text": request}, player=None)
-    print(f"Sent — {time.perf_counter()-t1:.3f}s | audio incoming...")
+    logging.getLogger(__name__).info('Sent -- {time.perf_counter()-t1:.3f}s | audio incoming...')
     time.sleep(8)
-    print(f"\n{'✅' if result else '❌'}")
+    logging.getLogger(__name__).info("\\n{'[OK]' if result else '[FAIL]'}")

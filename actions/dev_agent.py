@@ -1,7 +1,8 @@
-import subprocess
-import sys
+import logging  # migrated from print()
 import json
 import re
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -12,22 +13,28 @@ def get_base_dir():
     return Path(__file__).resolve().parent.parent
 
 
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
+
 BASE_DIR         = get_base_dir()
-API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
 PROJECTS_DIR     = Path.home() / "Desktop" / "JarvisProjects"
 MAX_FIX_ATTEMPTS = 5
 MODEL_PLANNER    = "gemini-2.5-flash"
 MODEL_WRITER     = "gemini-2.5-flash"
 
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
-def _get_model(model_name: str):
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    return genai.GenerativeModel(model_name)
+def _get_client():
+    from google.genai import Client
+    return Client(api_key=_get_api_key())
 
 
 def _strip_fences(text: str) -> str:
@@ -65,7 +72,7 @@ def _classify_error(output: str) -> str:
 
     if "syntaxerror" in low or "invalid syntax" in low:
         return "syntax_error"
-    
+
     if "cannot import" in low or "importerror" in low:
         return "import_error"
 
@@ -80,7 +87,7 @@ def _classify_error(output: str) -> str:
 
 
 def _has_error(output: str, run_command: str) -> bool:
-    
+
     low = output.lower()
 
     if "timed out" in low:
@@ -97,26 +104,26 @@ class RateLimitError(Exception):
 
 
 def _plan_project(description: str, language: str) -> dict:
-    model = _get_model(MODEL_PLANNER)
+    client = _get_client()
 
     prompt = f"""You are a senior software architect. Create a minimal, complete file plan for this project.
 
 Language: {language}
 Description: {description}
 
-Return ONLY valid JSON — no markdown, no explanation:
+Return ONLY valid JSON -- no markdown, no explanation:
 {{
   "project_name": "snake_case_name",
   "entry_point": "main.py",
   "files": [
     {{
       "path": "main.py",
-      "description": "Entry point — what it does and which modules it imports",
+      "description": "Entry point -- what it does and which modules it imports",
       "imports": ["utils.helpers", "core.engine"]
     }},
     {{
       "path": "utils/helpers.py",
-      "description": "Helper utilities — what functions it exposes",
+      "description": "Helper utilities -- what functions it exposes",
       "imports": []
     }}
   ],
@@ -125,9 +132,9 @@ Return ONLY valid JSON — no markdown, no explanation:
 }}
 
 Critical rules:
-1. List files in DEPENDENCY ORDER — files with no imports come first, entry point comes last.
+1. List files in DEPENDENCY ORDER -- files with no imports come first, entry point comes last.
 2. The "imports" field must list every other project module this file imports (dot-notation, e.g. "utils.helpers").
-3. Keep it minimal — only files truly needed.
+3. Keep it minimal -- only files truly needed.
 4. Entry point must be in the files list.
 5. Use relative paths only (e.g. "utils/helpers.py", not absolute paths).
 6. Standard library modules (os, sys, json, etc.) do NOT go in "dependencies".
@@ -135,11 +142,12 @@ Critical rules:
 JSON:"""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model=MODEL_PLANNER, contents=prompt)
         raw = _strip_fences(response.text)
         return json.loads(raw)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Planner returned invalid JSON: {e}\nRaw: {response.text[:300]}")
+        msg = f"Planner returned invalid JSON: {e}\nRaw: {response.text[:300]}"
+        raise ValueError(msg)
     except Exception as e:
         if _is_rate_limit(e):
             raise RateLimitError(str(e))
@@ -153,7 +161,7 @@ def _write_file(
     project_dir: Path,
     already_written: dict[str, str],
 ) -> str:
-    model = _get_model(MODEL_WRITER)
+    client = _get_client()
 
     file_path = file_info["path"]
     file_desc = file_info.get("description", "")
@@ -205,7 +213,7 @@ Purpose of this file: {file_desc}
 
 General rules:
 - Output ONLY raw code. Absolutely no explanation, no markdown, no triple backticks.
-- Write COMPLETE, RUNNABLE code — no placeholders, no "# TODO", no "pass" stubs.
+- Write COMPLETE, RUNNABLE code -- no placeholders, no "# TODO", no "pass" stubs.
 - Every import must either be from the standard library, listed dependencies, or the project files shown above.
 - Match import paths EXACTLY to the file paths in the project structure (e.g. if file is "utils/helpers.py", import as "from utils.helpers import ...").
 - Use proper error handling (try/except) where I/O or network calls are made.
@@ -214,14 +222,14 @@ General rules:
 Code for {file_path}:"""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model=MODEL_WRITER, contents=prompt)
         code = _strip_fences(response.text)
 
         full_path = project_dir / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(code, encoding="utf-8")
 
-        print(f"[DevAgent] ✅ Written: {file_path} ({len(code)} chars)")
+        logging.getLogger("DevAgent").debug('Written: {file_path} ({len(code)} chars)')
         return code
 
     except Exception as e:
@@ -243,15 +251,15 @@ def _install_dependencies(dependencies: list[str], project_dir: Path) -> str:
         if result.returncode != 0:
             to_install.append(dep)
         else:
-            print(f"[DevAgent] ✓ Already installed: {pkg_name}")
+            logging.getLogger("DevAgent").debug(f"Already installed: {pkg_name}")
 
     if not to_install:
         return f"All dependencies already installed: {', '.join(dependencies)}"
 
-    print(f"[DevAgent] 📦 Installing: {to_install}")
+    logging.getLogger("DevAgent").info(f"📦 Installing: {to_install}")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install"] + to_install,
+            [sys.executable, "-m", "pip", "install", *to_install],
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=120, cwd=str(project_dir)
@@ -279,14 +287,14 @@ def _open_vscode(project_dir: Path) -> bool:
                 stderr=subprocess.DEVNULL
             )
             time.sleep(1.5)
-            print(f"[DevAgent] 💻 VSCode opened: {project_dir}")
+            logging.getLogger("DevAgent").info('💻 VSCode opened: {project_dir}')
             return True
         except Exception:
             continue
     return False
 
 def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
-    print(f"[DevAgent] 🚀 Running: {run_command}")
+    logging.getLogger("DevAgent").info('🚀 Running: {run_command}')
     try:
         parts = run_command.split()
         if parts[0].lower() == "python":
@@ -312,7 +320,7 @@ def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
         return "\n\n".join(combined_parts) if combined_parts else "Ran with no output."
 
     except subprocess.TimeoutExpired:
-        return f"Timed out after {timeout}s — long-running app (server/GUI) is likely working."
+        return f"Timed out after {timeout}s -- long-running app (server/GUI) is likely working."
     except FileNotFoundError as e:
         return f"Command not found: {e}"
     except Exception as e:
@@ -328,7 +336,7 @@ def _try_auto_install(error_output: str, project_dir: Path) -> bool:
         return False
 
     pkg = match.group(1).replace("_", "-").split(".")[0]
-    print(f"[DevAgent] 🔧 Auto-installing missing package: {pkg}")
+    logging.getLogger("DevAgent").info('🔧 Auto-installing missing package: {pkg}')
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", pkg],
@@ -350,7 +358,7 @@ def _fix_files(
     entry_point: str,
 ) -> dict[str, str]:
 
-    model = _get_model(MODEL_PLANNER)
+    client = _get_client()
 
     error_file, error_line = _parse_traceback(error_output, list(file_codes.keys()))
     error_type = _classify_error(error_output)
@@ -390,7 +398,7 @@ Project goal: {project_description}
 All project files:
 {chr(10).join(f"  - {f['path']}: {f.get('description', '')}" for f in all_files)}
 
-Other files for context (read-only — fix only the target file):
+Other files for context (read-only -- fix only the target file):
 {other_ctx[:3500]}
 
 File to fix: {fix_path}{line_hint}
@@ -405,14 +413,14 @@ Current (broken) code:
 Rules:
 - Output ONLY the complete fixed code. No explanation, no markdown, no backticks.
 - Fix ALL errors visible in the error output.
-- Keep all existing correct logic — do not remove working features.
+- Keep all existing correct logic -- do not remove working features.
 - Ensure import paths match the actual project file structure exactly.
 - Do NOT introduce new bugs or remove error handling.
 
 Fixed code for {fix_path}:"""
 
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(model=MODEL_PLANNER, contents=prompt)
             fixed = _strip_fences(response.text)
 
             full_path = project_dir / fix_path
@@ -420,12 +428,12 @@ Fixed code for {fix_path}:"""
             full_path.write_text(fixed, encoding="utf-8")
 
             updated_codes[fix_path] = fixed
-            print(f"[DevAgent] 🔧 Fixed: {fix_path}")
+            logging.getLogger("DevAgent").info('🔧 Fixed: {fix_path}')
 
         except Exception as e:
             if _is_rate_limit(e):
                 raise RateLimitError(str(e))
-            print(f"[DevAgent] ⚠️ Could not fix {fix_path}: {e}")
+            logging.getLogger("DevAgent").warning('️ Could not fix {fix_path}: {e}')
 
     return updated_codes
 
@@ -439,7 +447,7 @@ def _build_project(
 ) -> str:
 
     def log(msg: str):
-        print(f"[DevAgent] {msg}")
+        logging.getLogger("DevAgent").info('{msg}')
         if player:
             player.write_log(f"[DevAgent] {msg}")
 
@@ -495,7 +503,7 @@ def _build_project(
                 break
             except RateLimitError:
                 if attempt == 0:
-                    log("Rate limit — waiting 20s...")
+                    log("Rate limit -- waiting 20s...")
                     time.sleep(20)
                 else:
                     log(f"Rate limit retry failed for {file_path}, skipping.")
@@ -515,7 +523,7 @@ def _build_project(
     _open_vscode(project_dir)
 
     last_output   = ""
-    auto_installs = 0  
+    auto_installs = 0
 
     for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
         log(f"Running project (attempt {attempt}/{MAX_FIX_ATTEMPTS})...")
@@ -565,7 +573,7 @@ def _build_project(
 
     msg = (
         f"I couldn't fully fix '{proj_name}' after {MAX_FIX_ATTEMPTS} attempts, sir. "
-        f"Project is saved at {project_dir} — open it in VSCode and check manually."
+        f"Project is saved at {project_dir} -- open it in VSCode and check manually."
     )
     if speak: speak(msg)
     return f"{msg}\n\nLast error:\n{last_output[:600]}"

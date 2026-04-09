@@ -2,6 +2,7 @@
 # Rolling conversation buffer with periodic summarization.
 # Compresses long conversations into key facts to maintain context.
 
+import logging  # migrated from print()
 import contextlib
 import io
 import sys
@@ -131,7 +132,7 @@ class ConversationManager:
             self._save_to_disk()
             return summary
         except Exception as e:
-            print(f"[ConversationManager] Summarization failed: {e}")
+            logging.getLogger("ConversationManager").info(f"Summarization failed: {e}")
             return ""
 
     def _summarize_conversation(self) -> None:
@@ -146,7 +147,7 @@ class ConversationManager:
         if total_chars < SUMMARIZE_CHAR_LIMIT:
             return
 
-        print(f"[ConversationManager] Summarizing conversation ({total_chars} chars)")
+        logging.getLogger("ConversationManager").info('Summarizing conversation ({total_chars} chars)')
 
         with self._lock:
             turns_snapshot = list(self._turns)
@@ -170,9 +171,9 @@ class ConversationManager:
                     self._turns.append(turn)
 
             self._save_to_disk()
-            print(f"[ConversationManager] Conversation condensed: {total_chars} -> ~{len(brief_summary) + sum(len(t.content) for t in recent_turns)} chars")
+            logging.getLogger("ConversationManager").info('Conversation condensed: {total_chars} -> ~{len(brief_summary) + sum(len(t.content) for t in recent_turns)} chars')
         except Exception as e:
-            print(f"[ConversationManager] Condensation failed: {e}")
+            logging.getLogger("ConversationManager").info('Condensation failed: {e}')
 
     def _build_summary_prompt(self, turns: list[Turn], old_summary: str) -> str:
         lines = []
@@ -214,7 +215,7 @@ class ConversationManager:
                     ],
                 }, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"[ConversationManager] Could not save conversation: {e}")
+            logging.getLogger("ConversationManager").info('Could not save conversation: {e}')
 
     def clear(self):
         """Clears the conversation buffer."""
@@ -242,7 +243,7 @@ def _gemini_summarize(prompt: str) -> str:
         )
         return response.text.strip()
     except Exception as e:
-        print(f"[ConversationManager] Gemini summarize failed: {e}")
+        logging.getLogger("ConversationManager").info('Gemini summarize failed: {e}')
         return _simple_summarize(prompt)
 
 

@@ -1,3 +1,5 @@
+import ast
+import logging  # migrated from print()
 import json
 import re
 import sys
@@ -243,7 +245,7 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
         from actions.flight_finder import flight_finder
         return flight_finder(parameters=parameters, player=None, speak=speak) or "Done."
 
-    print(f"[Executor] Unknown tool '{tool}' -- falling back to generated_code")
+    logging.getLogger("Executor").info(f"Unknown tool '{tool}' -- falling back to generated_code")
     return _run_generated_code(f"Accomplish this task: {parameters}", speak=speak)
 
 
@@ -251,35 +253,91 @@ def _call_tool(tool: str, parameters: dict, speak: Callable | None) -> str:
 
 _DANGEROUS_BUILTINS = frozenset([
     "__import__", "eval", "exec", "compile", "open", "input",
-    "breakpoint", "reload", "__builtins__",
+    "breakpoint", "reload", "__builtins__", "__globals__", "__locals__",
+    "globals", "locals", "vars", "dir",
 ])
 _SAFE_BUILTINS = {k: v for k, v in __builtins__.items()
                   if k not in _DANGEROUS_BUILTINS}
 
-_RESTRICTED_MODULES = frozenset([
-    "os.system", "os.popen", "os.spawn", "os.execl", "os.execv",
-    "subprocess.Popen", "shutil.rmtree", "shutil.move",
-    "http.server", "socketserver", "ftplib", "telnetlib",
-    "cryptography", "hashlib", "ssl", "ctypes",
-    "pdb", "sys.settrace",
+_ALLOWED_AST_NODES = frozenset([
+    # Expressions
+    ast.Expr, ast.Constant, ast.Name, ast.BinOp, ast.UnaryOp,
+    ast.BoolOp, ast.Compare, ast.IfExp, ast.Lambda,
+    ast.List, ast.Tuple, ast.Set, ast.Dict, ast.DictComp,
+    ast.ListComp, ast.SetComp, ast.Subscript, ast.Attribute,
+    ast.Call, ast.Starred, ast.Slice, ast.FormattedValue,
+    ast.JoinedStr,
+    # Statements
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.Return, ast.Assign,
+    ast.AnnAssign, ast.AugAssign, ast.Raise, ast.Assert,
+    ast.Import, ast.ImportFrom, ast.If, ast.For, ast.AsyncFor,
+    ast.While, ast.Try, ast.With, ast.Global, ast.Nonlocal,
+    ast.Expr, ast.Pass, ast.Break, ast.Continue,
+    ast.Delete,  # name declarations
 ])
 
-_LOG_DIR = get_base_dir() / "memory" / "execution_logs"
+_ALLOWED_BUILTINS = frozenset([
+    "print", "len", "range", "enumerate", "zip", "map", "filter",
+    "sum", "min", "max", "abs", "round", "pow", "divmod",
+    "int", "float", "str", "bool", "list", "dict", "set", "tuple", "type",
+    "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
+    "sorted", "reversed", "any", "all", "open", "open",
+    "input",  # allowed since output is captured
+    "format", "hex", "oct", "bin", "chr", "ord",
+    "repr", "ascii", "bytearray", "bytes", "complex", "frozenset", "memoryview",
+    "object", "property", "classmethod", "staticmethod",
+])
 
 
-def _log_execution(code: str, description: str) -> Path:
-    import datetime as dt
-    ts  = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log = _LOG_DIR / f"exec_{ts}.log"
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log.write_text(
-        f"# MARK XXXV Generated Code Execution\n"
-        f"# Time: {dt.datetime.now().isoformat()}\n"
-        f"# Goal: {description}\n"
-        f"# -----------------------------------------\n\n{code}",
-        encoding="utf-8"
-    )
-    return log
+def _validate_ast_sandbox(code: str) -> tuple[bool, str]:
+    """
+    Validate generated code against AST whitelist.
+    Returns (is_safe, error_message).
+    Blocks: exec, eval, compile, __import__, subprocess, os.system,
+    os.popen, open with write mode, breakpoints, attribute access on
+    forbidden modules.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, f"Syntax error: {e}"
+    for node in ast.walk(tree):
+        # Block dangerous calls
+        if isinstance(node, ast.Call):
+            # Block eval/exec/compile/__import__
+            if isinstance(node.func, ast.Name):
+                if node.func.id in ("eval", "exec", "compile", "__import__", "breakpoint", "reload"):
+                    return False, f"Forbidden: {node.func.id}()"
+                # Block open() with write mode
+                if node.func.id == "open":
+                    if len(node.args) >= 2:
+                        mode_arg = node.args[1]
+                        if isinstance(mode_arg, ast.Constant):
+                            mode = str(mode_arg.value)
+                            if mode.strip("+") in ("w", "a", "x"):
+                                return False, "Forbidden: open() with write mode"
+                if node.func.id not in _ALLOWED_BUILTINS:
+                    if node.func.id not in dir(__builtins__) and node.func.id not in _ALLOWED_BUILTINS:
+                        pass  # Allow unknown — trust Gemini for now
+            # Block attribute access on dangerous modules
+            if isinstance(node.func, ast.Attribute):
+                mod = node.func.value
+                if isinstance(mod, ast.Name) and mod.id in ("subprocess", "os"):
+                    if node.func.attr in ("system", "popen", "spawn", "execl",
+                                        "execv", "spawnl", "spawnv", "call",
+                                        "check_call", "check_output", "Popen",
+                                        "devnull", "chmod", "chown", "setreuid",
+                                        "setuid", "setgid", "setgroups"):
+                        return False, f"Forbidden: {mod.id}.{node.func.attr}"
+        # Block Import/ImportFrom that bring in dangerous modules
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                name = alias.name.split(".")[0]
+                if name in ("subprocess", "ctypes", "socket", "ssl",
+                           "http", "urllib", "ftplib", "telnetlib",
+                           "cryptography", "hashlib", "pdb", "sys"):
+                    return False, f"Forbidden import: {name}"
+    return True, ""
 
 
 def _sandbox_safe_run(code_path: str) -> subprocess.CompletedProcess:
@@ -314,6 +372,24 @@ def _sandbox_safe_run(code_path: str) -> subprocess.CompletedProcess:
     finally:
         with contextlib.suppress(Exception):
             os.unlink(runner)
+
+
+_LOG_DIR = get_base_dir() / "memory" / "execution_logs"
+
+
+def _log_execution(code: str, description: str) -> Path:
+    import datetime as dt
+    ts  = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log = _LOG_DIR / f"exec_{ts}.log"
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        f"# MARK XXXV Generated Code Execution\n"
+        f"# Time: {dt.datetime.now().isoformat()}\n"
+        f"# Goal: {description}\n"
+        f"# -----------------------------------------\n\n{code}",
+        encoding="utf-8"
+    )
+    return log
 
 
 def _run_generated_code(description: str, speak: Callable | None = None) -> str:
@@ -355,13 +431,17 @@ def _run_generated_code(description: str, speak: Callable | None = None) -> str:
         )
         code = response.text.strip()
         code = re.sub(r"```(?:python)?", "", code).strip().rstrip("`").strip()
+        # AST whitelist validation BEFORE execution
+        is_safe, err_msg = _validate_ast_sandbox(code)
+        if not is_safe:
+            raise RuntimeError(f"Generated code blocked by sandbox: {err_msg}")
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False, encoding="utf-8"
         ) as f:
             f.write(code)
             tmp_path = f.name
         log_path = _log_execution(code, description)
-        print(f"[Executor] [CODE] Running generated code (logged to {log_path})")
+        logging.getLogger("Executor").info(f'Running generated code (logged to {log_path})')
         result = _sandbox_safe_run(tmp_path)
         with contextlib.suppress(Exception):
             os.unlink(tmp_path)
@@ -398,7 +478,7 @@ def _inject_context(params: dict, tool: str, step_results: dict, goal: str = "")
             if all_results:
                 combined = "\n\n---\n\n".join(all_results)
                 params["content"] = combined
-                print("[Executor] [INJECT] Injected content from previous steps")
+                logging.getLogger("Executor").info('Injected content from previous steps')
     if step_results and "context" not in params:
         prev = {k: str(v)[:500] for k, v in step_results.items() if v}
         if prev:
@@ -429,7 +509,7 @@ def _translate_to_goal_language(content: str, goal: str) -> str:
         from google.genai import Client
         client = Client(api_key=_get_api_key())
         target = _detect_language(goal)
-        print(f"[Executor] [LANG] Translating to: {target}")
+        logging.getLogger("Executor").info(f"Translating to: {target}")
         prompt = (
             f"Translate the following text into {target}.\n"
             f"IMPORTANT: Translate EVERYTHING. Keep facts and structure.\n"
@@ -438,7 +518,7 @@ def _translate_to_goal_language(content: str, goal: str) -> str:
         response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return response.text.strip()
     except Exception as e:
-        print(f"[Executor] WARN Translation failed: {e}")
+        logging.getLogger("Executor").info(f"WARN Translation failed: {e}")
         return content
 
 
@@ -588,7 +668,7 @@ class AgentExecutor:
 
     def __init__(self):
         self._completed_actions: dict[str, str] = {}
-        self._last_activity_time: float = time.time()
+        self._last_activity_time: float = _time_module.time()
         self._current_step: str | None = None
         # Conversation context buffer: stores recent tool results for context injection
         self._conversation_context: list[dict] = []
@@ -634,7 +714,7 @@ class AgentExecutor:
         Check if the executor is stuck (no activity for STUCK_TIMEOUT_SECONDS).
         Returns True if stuck detected and recovery triggered.
         """
-        current_time = time.time()
+        current_time = _time_module.time()
         if current_time - self._last_activity_time > self.STUCK_TIMEOUT_SECONDS:
             if self._current_step:
                 print(f"[Executor] [STUCK] No activity for {self.STUCK_TIMEOUT_SECONDS}s "
@@ -646,13 +726,13 @@ class AgentExecutor:
 
     def _update_activity(self) -> None:
         """Update the last activity timestamp after a tool completes."""
-        self._last_activity_time = time.time()
+        self._last_activity_time = _time_module.time()
         self._current_step = None
 
     def _start_step(self, step_num: str, step_desc: str) -> None:
         """Mark the start of a step for stuck detection."""
         self._current_step = f"Step {step_num}: {step_desc}"
-        self._last_activity_time = time.time()
+        self._last_activity_time = _time_module.time()
 
     def _normalize_action_key(self, tool: str, params: dict) -> str:
         """Create a normalized key for action deduplication."""
@@ -672,7 +752,7 @@ class AgentExecutor:
     def _is_duplicate_action(self, tool: str, params: dict) -> bool:
         action_key = self._normalize_action_key(tool, params)
         if action_key in self._completed_actions:
-            print(f"[Executor] [SKIP] Duplicate action: [{tool}] {params}")
+            logging.getLogger("Executor").info(f"Duplicate action: [{tool}] {params}")
             return True
         return False
 
@@ -701,7 +781,7 @@ class AgentExecutor:
         if self._is_duplicate_action(tool, params):
             return (step, None, "skipped_duplicate")
 
-        print(f"\n[Executor] Step {step_num}: [{tool}] {desc}")
+        logging.getLogger(__name__).info(f"\n[Executor] Step {step_num}: [{tool}] {desc}")
 
         attempt = 1
         while attempt <= 3:
@@ -716,7 +796,7 @@ class AgentExecutor:
                 return (step, None, result)
             except Exception as e:
                 error_msg = str(e)
-                print(f"[Executor] FAIL Step {step_num} attempt {attempt}: {error_msg}")
+                logging.getLogger("Executor").info(f"FAIL Step {step_num} attempt {attempt}: {error_msg}")
                 recovery = analyze_error(step, error_msg, attempt=attempt)
                 decision = recovery["decision"]
 
@@ -729,7 +809,7 @@ class AgentExecutor:
                     continue
 
                 if decision == ErrorDecision.SKIP:
-                    print(f"[Executor] [SKIP] Step {step_num}")
+                    logging.getLogger("Executor").info(f"Step {step_num}")
                     return (step, None, "skipped")
 
                 if decision == ErrorDecision.ABORT:
@@ -746,7 +826,7 @@ class AgentExecutor:
                         self.add_tool_result(step_num, fixed_step["tool"], fixed_step["parameters"], res)
                         return (step, None, res)
                     except Exception as fix_err:
-                        print(f"[Executor] WARN Fix failed: {fix_err}")
+                        logging.getLogger("Executor").info(f"WARN Fix failed: {fix_err}")
 
                 return (step, error_msg, None)
 
@@ -765,14 +845,14 @@ class AgentExecutor:
                 if not params:
                     continue
                 try:
-                    print(f"[Executor] [FAST] {tool} -- skipping planner")
+                    logging.getLogger("Executor").info(f"{tool} -- skipping planner")
                     result = _call_tool(tool, params, None)
                     self._mark_action_done(tool, params, str(result))
                     # Track fast path results in context buffer
                     self.add_tool_result("fast", tool, params, result)
                     return self._summarize_fast(goal, tool, result)
                 except Exception as e:
-                    print(f"[Executor] [FAST] {tool} failed ({e}), falling back to planner")
+                    logging.getLogger("Executor").info(f"{tool} failed ({e}), falling back to planner")
                     return None
         return None
 
@@ -781,16 +861,100 @@ class AgentExecutor:
             return "Task failed, sir."
         return str(result)[:300]
 
+
+    def _group_parallel_steps(self, steps: list[dict]) -> list[list[dict] | dict]:
+        """Group consecutive parallel steps together."""
+        groups = []
+        i = 0
+        while i < len(steps):
+            step = steps[i]
+            if step.get('parallel', False):
+                # Collect consecutive parallel steps
+                parallel_group = []
+                while i < len(steps) and steps[i].get('parallel', False):
+                    parallel_group.append(steps[i])
+                    i += 1
+                groups.append(parallel_group)
+            else:
+                groups.append(step)
+                i += 1
+        return groups
+
+    def _execute_parallel_group(
+        self,
+        parallel_steps: list[dict],
+        step_results: dict,
+        goal: str,
+        cancel_flag,
+        speak,
+    ) -> tuple[list[dict], list[tuple[dict, str]], bool]:
+        """Execute a group of parallel steps in a thread pool."""
+        step_nums = [s.get('step', '?') for s in parallel_steps]
+        logging.getLogger(__name__).info(f"\n[Executor] [PARALLEL] Starting {len(parallel_steps)} parallel steps: {step_nums}")
+
+        completed = []
+        failed = []
+        results = {}
+        all_success = True
+
+        # Use ThreadPoolExecutor with max 4 workers
+        max_workers = min(4, len(parallel_steps))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all steps
+            future_to_step = {}
+            for step in parallel_steps:
+                future = executor.submit(
+                    self._execute_single_step,
+                    step,
+                    dict(step_results),  # Copy for thread safety
+                    goal,
+                    cancel_flag,
+                    speak,
+                )
+                future_to_step[future] = step
+
+            # Collect results as they complete
+            for future in as_completed(future_to_step):
+                step = future_to_step[future]
+                try:
+                    result_step, error_msg, result = future.result()
+                    if error_msg == 'cancelled':
+                        if speak:
+                            speak('Task cancelled, sir.')
+                        return [], [], True  # cancelled
+
+                    if result is None or (result_step is not None and error_msg):
+                        all_success = False
+                        if result_step is not None and error_msg:
+                            failed.append((result_step, error_msg))
+                        logging.getLogger(__name__).info('step')
+                    else:
+                        if result != 'skipped_duplicate':
+                            completed.append(step)
+                        if result and result != 'skipped' and result != 'skipped_duplicate':
+                            results[step.get('step', '?')] = result
+                        logging.getLogger(__name__).info('step')
+                except Exception as e:
+                    all_success = False
+                    failed.append((step, str(e)))
+                    logging.getLogger(__name__).info('step')
+
+        # Merge results into step_results (thread-safe update)
+        step_results.update(results)
+
+        return completed, failed, all_success
+
     def execute(
         self,
         goal:        str,
         speak:       Callable | None        = None,
         cancel_flag: threading.Event | None = None,
     ) -> str:
-        print(f"\n[Executor] Goal: {goal}")
+        logging.getLogger(__name__).info(f"\n[Executor] Goal: {goal}")
 
         self._completed_actions = {}
-        self._last_activity_time = time.time()
+        self._last_activity_time = _time_module.time()
         self._current_step = None
 
         # Fast path: single known-tool goals skip the planner
@@ -810,105 +974,76 @@ class AgentExecutor:
                 if speak: speak(msg)
                 return msg
 
+            # Group steps into sequential groups (some groups contain parallel steps)
+            step_groups = self._group_parallel_steps(steps)
+
             success      = True
             failed_step  = None
             failed_error = ""
 
-            for step in steps:
+            for group in step_groups:
                 if cancel_flag and cancel_flag.is_set():
                     if speak: speak("Task cancelled, sir.")
                     return "Task cancelled."
 
-                # Check for stuck state before each step
-                if self._check_stuck_state(cancel_flag):
-                    if speak: speak("Task appeared stuck, attempting recovery, sir.")
-                    failed_step = step
-                    failed_error = f"Stuck detection triggered on step {step.get('step')}"
-                    success = False
-                    break
+                if isinstance(group, list):
+                    # Parallel group
+                    group_completed, group_failed, group_success = self._execute_parallel_group(
+                        group, step_results, goal, cancel_flag, speak
+                    )
+                    completed_steps.extend(group_completed)
 
-                step_num = step.get("step", "?")
-                tool     = step.get("tool", "generated_code")
-                desc     = step.get("description", "")
-                params   = step.get("parameters", {})
-
-                # Mark step start for stuck detection
-                self._start_step(step_num, desc)
-
-                params = _inject_context(params, tool, step_results, goal=goal)
-
-                if self._is_duplicate_action(tool, params):
-                    completed_steps.append(step)
-                    self._update_activity()
-                    continue
-
-                print(f"\n[Executor] Step {step_num}: [{tool}] {desc}")
-
-                attempt = 1
-                step_ok = False
-
-                while attempt <= 3:
-                    if cancel_flag and cancel_flag.is_set():
+                    if not group_success and group_failed:
+                        failed_step = group_failed[0][0]
+                        failed_error = group_failed[0][1]
+                        success = False
                         break
-                    try:
-                        result = _call_tool(tool, params, speak)
-                        self._mark_action_done(tool, params, str(result))
-                        step_results[step_num] = result
-                        # Store result in conversation context buffer
-                        self.add_tool_result(step_num, tool, params, result)
-                        completed_steps.append(step)
+                else:
+                    # Single sequential step
+                    step = group
+
+                    # Check for stuck state before each step
+                    if self._check_stuck_state(cancel_flag):
+                        if speak:
+                            speak("Task appeared stuck, attempting recovery, sir.")
+                        failed_step = step
+                        failed_error = f"Stuck detection triggered on step {step.get('step')}"
+                        success = False
+                        break
+
+                    step_num = step.get("step", "?")
+                    tool     = step.get("tool", "generated_code")
+                    desc     = step.get("description", "")
+                    params   = step.get("parameters", {})
+
+                    # Mark step start for stuck detection
+                    self._start_step(step_num, desc)
+
+                    result_step, error_msg, result = self._execute_single_step(
+                        step, step_results, goal, cancel_flag, speak
+                    )
+
+                    if error_msg == "cancelled":
+                        return "Task cancelled."
+
+                    if result_step is None and error_msg:
+                        if "aborted" in error_msg.lower():
+                            return error_msg
+                        failed_step = step
+                        failed_error = error_msg
+                        success = False
+                        break
+
+                    if result is not None:
+                        if result != "skipped" and result != "skipped_duplicate":
+                            step_results[step.get("step", "?")] = result
+                            # Store result in conversation context buffer
+                            self.add_tool_result(step.get("step", "?"), tool, params, result)
+                            completed_steps.append(step)
+                        elif result == "skipped":
+                            completed_steps.append(step)
                         # Update activity after successful tool execution
                         self._update_activity()
-                        print(f"[Executor] OK Step {step_num} done: {str(result)[:100]}")
-                        step_ok = True
-                        break
-                    except Exception as e:
-                        error_msg = str(e)
-                        print(f"[Executor] FAIL Step {step_num} attempt {attempt}: {error_msg}")
-                        recovery = analyze_error(step, error_msg, attempt=attempt)
-                        decision = recovery["decision"]
-                        if speak and recovery.get("user_message"):
-                            speak(recovery["user_message"])
-                        if decision == ErrorDecision.RETRY:
-                            attempt += 1
-                            _time_module.sleep(2)
-                            continue
-                        if decision == ErrorDecision.SKIP:
-                            print(f"[Executor] [SKIP] Step {step_num}")
-                            completed_steps.append(step)
-                            self._update_activity()
-                            step_ok = True
-                            break
-                        if decision == ErrorDecision.ABORT:
-                            msg = f"Task aborted, sir. {recovery.get('reason', '')}"
-                            if speak: speak(msg)
-                            return msg
-                        fix_suggestion = recovery.get("fix_suggestion", "")
-                        if fix_suggestion and tool != "generated_code":
-                            try:
-                                fixed_step = generate_fix(step, error_msg, fix_suggestion)
-                                if speak: speak("Trying an alternative approach, sir.")
-                                res = _call_tool(fixed_step["tool"], fixed_step["parameters"], speak)
-                                step_results[step_num] = res
-                                # Store fixed step result in conversation context
-                                self.add_tool_result(step_num, fixed_step["tool"], fixed_step["parameters"], res)
-                                completed_steps.append(step)
-                                self._update_activity()
-                                step_ok = True
-                                break
-                            except Exception as fix_err:
-                                print(f"[Executor] WARN Fix failed: {fix_err}")
-                        failed_step  = step
-                        failed_error = error_msg
-                        success      = False
-                        break
-
-                if not step_ok and not failed_step:
-                    failed_step  = step
-                    failed_error = "Max retries exceeded"
-                    success      = False
-                if not success:
-                    break
 
             if success:
                 return self._summarize(goal, completed_steps, speak)

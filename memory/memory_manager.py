@@ -8,6 +8,7 @@ Düzeltmeler:
   - Projeleri, favori şeyleri, arkadaşları daha iyi yakalar
 """
 
+import logging  # migrated from print()
 import json
 import sys
 from datetime import datetime
@@ -44,7 +45,7 @@ def _empty_memory() -> dict:
 
 def load_memory() -> dict:
     if not MEMORY_PATH.exists():
-        print("[Memory] INFO No memory file found, starting fresh")
+        logging.getLogger("Memory").info('INFO No memory file found, starting fresh')
         return _empty_memory()
 
     with _lock:
@@ -57,12 +58,12 @@ def load_memory() -> dict:
                         data[key] = {}
                 # Count non-empty memory entries for debug
                 non_empty = sum(1 for v in data.values() if isinstance(v, dict) and len(v) > 0)
-                print(f"[Memory] INFO Loaded {non_empty} categories from {MEMORY_PATH}")
+                logging.getLogger("Memory").info('INFO Loaded {non_empty} categories from {MEMORY_PATH}')
                 return data
-            print("[Memory] WARN Memory file corrupted (not a dict), starting fresh")
+            logging.getLogger("Memory").info('WARN Memory file corrupted (not a dict), starting fresh')
             return _empty_memory()
         except Exception as e:
-            print(f"[Memory] WARN Load error: {e}, starting fresh")
+            logging.getLogger("Memory").info('WARN Load error: {e}, starting fresh')
             return _empty_memory()
 
 
@@ -119,7 +120,7 @@ def update_memory(memory_update: dict) -> dict:
     memory = load_memory()
     if _recursive_update(memory, memory_update):
         save_memory(memory)
-        print(f"[Memory] [MEM] Saved: {list(memory_update.keys())}")
+        logging.getLogger("Memory").info('Saved: {list(memory_update.keys())}')
     return memory
 
 
@@ -211,7 +212,7 @@ def extract_memory(user_text: str, jarvis_text: str, api_key: str) -> dict:
         return {}
     except Exception as e:
         if "429" not in str(e):
-            print(f"[Memory] WARN Extract failed: {e}")
+            logging.getLogger("Memory").info('WARN Extract failed: {e}')
         return {}
 
 

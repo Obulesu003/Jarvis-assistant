@@ -1,7 +1,9 @@
 # actions/reminder.py
 
-import subprocess
+import logging  # migrated from print()
+import contextlib
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -20,7 +22,7 @@ def reminder(
         - time    (str) HH:MM
         - message (str)
 
-    Returns a result string — Live API voices it automatically.
+    Returns a result string -- Live API voices it automatically.
     No edge_speak needed.
     """
 
@@ -130,18 +132,14 @@ except Exception:
             shell=True, capture_output=True, text=True
         )
 
-        try:
+        with contextlib.suppress(Exception):
             os.remove(xml_path)
-        except Exception:
-            pass
 
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()
-            print(f"[Reminder] ❌ schtasks failed: {err}")
-            try:
+            logging.getLogger("Reminder").error(f"schtasks failed: {err}")
+            with contextlib.suppress(Exception):
                 os.remove(notify_script)
-            except Exception:
-                pass
             return "I couldn't schedule the reminder due to a system error."
 
         if player:

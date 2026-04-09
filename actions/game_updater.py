@@ -1,13 +1,14 @@
+import logging  # migrated from print()
+import json
 import os
 import re
-import sys
-import json
-import time
 import subprocess
+import sys
 import threading
+import time
 import winreg
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 
 def _find_steam_path() -> Path | None:
@@ -123,14 +124,14 @@ def _get_steam_window_rect() -> tuple[int, int, int, int] | None:
 
 def _click_first_profile_by_screenshot() -> bool:
     try:
-        import pyautogui
         import numpy as np
+        import pyautogui
 
         time.sleep(1.5)
 
         win = _get_steam_window_rect()
         if not win:
-            print("[GameUpdater] ⚠️ Steam window not found")
+            logging.getLogger("GameUpdater").warning('️ Steam window not found')
             return False
 
         wx, wy, ww, wh = win
@@ -156,7 +157,7 @@ def _click_first_profile_by_screenshot() -> bool:
         colorful = (max_c > 60) & (sat > 40)
 
         if not colorful.any():
-            print("[GameUpdater] ⚠️ No colorful avatar region found — clicking estimated center-left")
+            logging.getLogger("GameUpdater").warning('️ No colorful avatar region found -- clicking estimated center-left')
             pyautogui.click(wx + ww // 2 - ww // 6, wy + wh // 2)
             return True
 
@@ -176,20 +177,20 @@ def _click_first_profile_by_screenshot() -> bool:
         abs_x = wx + search_x1 + center_x_local
         abs_y = wy + search_y1 + center_y_local
 
-        print(f"[GameUpdater] 🎯 First profile avatar at ({abs_x}, {abs_y}) — clicking")
+        logging.getLogger("GameUpdater").info('🎯 First profile avatar at ({abs_x}, {abs_y}) -- clicking')
         pyautogui.click(abs_x, abs_y)
         return True
 
     except ImportError as e:
-        print(f"[GameUpdater] ⚠️ Missing library: {e}")
+        logging.getLogger("GameUpdater").warning(f"️ Missing library: {e}")
         return False
     except Exception as e:
-        print(f"[GameUpdater] ⚠️ Screenshot profile detection failed: {e}")
+        logging.getLogger("GameUpdater").warning(f"️ Screenshot profile detection failed: {e}")
         return False
 
 
 def _handle_steam_profile_selection() -> bool:
-    print("[GameUpdater] 🔍 Checking for 'Who's playing?' dialog...")
+    logging.getLogger("GameUpdater").info("🔍 Checking for 'Who's playing?' dialog...")
 
     win = _get_steam_window_rect()
     if not win:
@@ -198,8 +199,8 @@ def _handle_steam_profile_selection() -> bool:
     wx, wy, ww, wh = win
 
     try:
-        import pyautogui
         import numpy as np
+        import pyautogui
 
         screenshot = pyautogui.screenshot(region=(wx, wy, ww, wh))
         img        = np.array(screenshot)
@@ -215,7 +216,7 @@ def _handle_steam_profile_selection() -> bool:
         has_white_text = white_pixels > 100
 
         if not is_small_window and not has_white_text:
-            print("[GameUpdater] ℹ️ No profile dialog detected — Steam already logged in")
+            logging.getLogger("GameUpdater").info('️ No profile dialog detected -- Steam already logged in')
             return False
 
     except ImportError:
@@ -223,7 +224,7 @@ def _handle_steam_profile_selection() -> bool:
     except Exception:
         pass
 
-    print("[GameUpdater] 👤 Profile selection detected — clicking first profile")
+    logging.getLogger("GameUpdater").info('👤 Profile selection detected -- clicking first profile')
     return _click_first_profile_by_screenshot()
 
 
@@ -233,26 +234,26 @@ def _ensure_steam_running(steam_path: Path) -> bool:
 
     steam_exe = steam_path / "steam.exe"
     if not steam_exe.exists():
-        print("[GameUpdater] ❌ steam.exe not found")
+        logging.getLogger("GameUpdater").error('steam.exe not found')
         return False
 
-    print("[GameUpdater] 🚀 Starting Steam...")
+    logging.getLogger("GameUpdater").info('🚀 Starting Steam...')
     subprocess.Popen([str(steam_exe)])
 
     for _ in range(20):
         time.sleep(1)
         if _is_steam_running():
-            print("[GameUpdater] ✅ Steam running")
+            logging.getLogger("GameUpdater").debug('Steam running')
             time.sleep(4)
             _handle_steam_profile_selection()
             time.sleep(2)
             return True
 
-    print("[GameUpdater] ⚠️ Steam did not start in time")
+    logging.getLogger("GameUpdater").warning('️ Steam did not start in time')
     return False
 
 
-def _update_steam_games(steam_path: Path, game_name: str = None) -> str:
+def _update_steam_games(steam_path: Path, game_name: str | None = None) -> str:
     if not _ensure_steam_running(steam_path):
         return "Could not start Steam."
 
@@ -362,16 +363,17 @@ def _search_steam_appid(game_name: str) -> tuple[str | None, str | None]:
 
     if name_lower in _KNOWN_APPIDS:
         app_id, canonical = _KNOWN_APPIDS[name_lower]
-        print(f"[GameUpdater] 📖 Known: {canonical} ({app_id})")
+        logging.getLogger("GameUpdater").info('📖 Known: {canonical} ({app_id})')
         return app_id, canonical
 
     for key, (app_id, canonical) in _KNOWN_APPIDS.items():
         if name_lower in key or key in name_lower:
-            print(f"[GameUpdater] 📖 Known partial: {canonical} ({app_id})")
+            logging.getLogger("GameUpdater").info('📖 Known partial: {canonical} ({app_id})')
             return app_id, canonical
 
     try:
-        import urllib.request, urllib.parse
+        import urllib.parse
+        import urllib.request
         query = urllib.parse.quote(game_name)
         url   = f"https://store.steampowered.com/api/storesearch/?term={query}&l=english&cc=US"
         req   = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -379,16 +381,17 @@ def _search_steam_appid(game_name: str) -> tuple[str | None, str | None]:
             items = json.loads(resp.read().decode()).get("items", [])
         if items:
             best = items[0]
-            print(f"[GameUpdater] 🌐 Store API: {best['name']} ({best['id']})")
+            logging.getLogger("GameUpdater").info("🌐 Store API: {best['name']} ({best['id']})")
             return str(best["id"]), best["name"]
     except Exception as e:
-        print(f"[GameUpdater] ⚠️ AppID search failed: {e}")
+        logging.getLogger("GameUpdater").warning('️ AppID search failed: {e}')
 
     return None, None
 
 
 def _find_best_drive() -> dict | None:
-    import shutil, string
+    import shutil
+    import string
     drives = []
     for letter in string.ascii_uppercase:
         drive_path = f"{letter}:\\"
@@ -409,7 +412,7 @@ def _select_drive_in_dialog(dialog, drive_letter: str) -> bool:
             for ctrl in dialog.descendants(control_type=control_type):
                 if target in ctrl.window_text().upper():
                     ctrl.click_input()
-                    print(f"[GameUpdater] ✅ Drive via {control_type}: {ctrl.window_text()}")
+                    logging.getLogger("GameUpdater").debug('Drive via {control_type}: {ctrl.window_text()}')
                     return True
         except Exception:
             continue
@@ -460,7 +463,7 @@ def _handle_install_dialog(game_name: str) -> str:
 
     drive_letter = best_drive["letter"]
     drive_label  = f"{drive_letter}:"
-    print(f"[GameUpdater] 🏆 Target drive: {drive_label} ({best_drive['free_gb']:.1f} GB free)")
+    logging.getLogger("GameUpdater").info("🏆 Target drive: {drive_label} ({best_drive['free_gb']:.1f} GB free)")
 
     try:
         from pywinauto import Application, findwindows
@@ -486,7 +489,8 @@ def _handle_install_dialog(game_name: str) -> str:
                 break
 
         if not dialog:
-            raise RuntimeError("Dialog not found")
+            msg = "Dialog not found"
+            raise RuntimeError(msg)
 
         dialog.set_focus()
         time.sleep(0.4)
@@ -501,7 +505,7 @@ def _handle_install_dialog(game_name: str) -> str:
     except ImportError:
         return _handle_install_dialog_pyautogui(game_name, best_drive)
     except Exception as e:
-        print(f"[GameUpdater] ⚠️ pywinauto failed: {e}")
+        logging.getLogger("GameUpdater").warning('️ pywinauto failed: {e}')
         return _handle_install_dialog_pyautogui(game_name, best_drive)
 
 
@@ -544,7 +548,7 @@ def _handle_install_dialog_pyautogui(game_name: str, best_drive: dict) -> str:
     return f"Attempted drive {drive_label} selection and Install click for '{game_name}'."
 
 
-def _install_steam_game(steam_path: Path, game_name: str = None, app_id: str = None) -> str:
+def _install_steam_game(steam_path: Path, game_name: str | None = None, app_id: str | None = None) -> str:
     if not _ensure_steam_running(steam_path):
         return "Could not start Steam."
 
@@ -578,7 +582,7 @@ def _install_steam_game(steam_path: Path, game_name: str = None, app_id: str = N
             return f"Could not find '{game_name}' on Steam. Try providing the AppID directly."
         app_id    = found_id
         game_name = found_name or game_name
-        print(f"[GameUpdater] 🔍 Installing: {game_name} (AppID: {app_id})")
+        logging.getLogger("GameUpdater").info('🔍 Installing: {game_name} (AppID: {app_id})')
 
     try:
         subprocess.Popen([str(steam_exe), f"steam://install/{app_id}"])
@@ -603,7 +607,7 @@ def _get_download_status(steam_path: Path) -> str:
 
 
 def _watch_and_shutdown(steam_path: Path, speak=None, check_interval: int = 30, timeout_hours: int = 12):
-    print("[GameUpdater] 👁️ Watching downloads for shutdown...")
+    logging.getLogger("GameUpdater").info('👁️ Watching downloads for shutdown...')
     deadline = time.time() + timeout_hours * 3600
 
     for _ in range(24):
@@ -654,7 +658,7 @@ def _is_epic_running() -> bool:
         return False
 
 
-def _update_epic_games(epic_path: Path, game_name: str = None) -> str:
+def _update_epic_games(epic_path: Path, game_name: str | None = None) -> str:
     epic_exe = epic_path / "EpicGamesLauncher.exe"
     if not epic_exe.exists():
         return "Epic Games Launcher not found."
@@ -676,9 +680,8 @@ def _update_epic_games(epic_path: Path, game_name: str = None) -> str:
                     subprocess.Popen([str(epic_exe), f"com.epicgames.launcher://apps/{g['id']}?action=launch&silent=true"])
                     time.sleep(0.5)
                 return f"Triggered update check for {len(games)} Epic game(s)."
-            else:
-                subprocess.Popen([str(epic_exe)])
-                return f"Epic Games Launcher opened. {len(games)} game(s) will be checked."
+            subprocess.Popen([str(epic_exe)])
+            return f"Epic Games Launcher opened. {len(games)} game(s) will be checked."
         except Exception as e:
             return f"Epic update failed: {e}"
 
@@ -782,8 +785,7 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
                         if player: player.write_log(f"[GameUpdater] {msg[:100]}")
                         if speak: speak(msg)
                         return msg
-                    else:
-                        results.append(f"Steam: {_update_steam_games(steam_path, game_name=game_name)}")
+                    results.append(f"Steam: {_update_steam_games(steam_path, game_name=game_name)}")
                 else:
                     if action == "install":
                         results.append("Steam: Please specify a game name to install.")
@@ -813,5 +815,5 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
 
 if __name__ == "__main__":
     if "--scheduled" in sys.argv:
-        print(f"[GameUpdater] 🕐 Scheduled run at {datetime.now().strftime('%H:%M')}")
-        print(f"[GameUpdater] ✅ {game_updater({'action': 'update', 'platform': 'both'})}")
+        logging.getLogger("GameUpdater").info("🕐 Scheduled run at {datetime.now().strftime('%H:%M')}")
+        logging.getLogger("GameUpdater").debug("{game_updater({'action': 'update', 'platform': 'both'})}")

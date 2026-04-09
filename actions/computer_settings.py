@@ -1,5 +1,5 @@
 # actions/computer_settings.py
-# MARK XXV — Computer Settings & UI Controls
+# MARK XXV -- Computer Settings & UI Controls
 #
 # Kullanıcı "sesi aç", "uygulamayı kapat", "tam ekran yap", "şunu yaz" gibi
 # bilgisayar kontrol komutları verdiğinde bu dosya devreye girer.
@@ -8,10 +8,12 @@
 # - Cross-platform: Windows / macOS / Linux
 # - pyautogui + platform-specific API'ler
 
-import time
+import logging  # migrated from print()
+import json
+import platform
 import subprocess
 import sys
-import platform
+import time
 from pathlib import Path
 
 try:
@@ -28,19 +30,26 @@ try:
 except ImportError:
     _PYPERCLIP = False
 
-_OS = platform.system() 
+_OS = platform.system()
 
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
-BASE_DIR        = get_base_dir()
-API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+try:
+    from core.api_key_manager import get_gemini_key as _get_gemini_key
+except ImportError:
+    _get_gemini_key = None
 
-import json
+BASE_DIR        = get_base_dir()
+
 def _get_api_key() -> str:
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+    if _get_gemini_key is not None:
+        return _get_gemini_key()
+    import json
+    API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+    with open(API_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
 
 
@@ -72,19 +81,20 @@ def volume_set(value: int):
     value = max(0, min(100, value))
     if _OS == "Windows":
         try:
-            from ctypes import cast, POINTER
+            import math
+            from ctypes import POINTER, cast
+
             from comtypes import CLSCTX_ALL
             from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-            import math
             devices   = AudioUtilities.GetSpeakers()
             interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
             vol       = cast(interface, POINTER(IAudioEndpointVolume))
             vol_db    = -65.25 if value == 0 else max(-65.25, 20 * math.log10(value / 100))
             vol.SetMasterVolumeLevel(vol_db, None)
-            print(f"[Settings] 🔊 Volume → {value}%")
+            logging.getLogger("Settings").info('🔊 Volume -> {value}%')
             return
         except Exception as e:
-            print(f"[Settings] ⚠️ pycaw failed: {e}")
+            logging.getLogger("Settings").warning(f"️ pycaw failed: {e}")
     elif _OS == "Darwin":
         subprocess.run(["osascript", "-e", f"set volume output volume {value}"])
         return
@@ -512,9 +522,10 @@ def _detect_action(description: str) -> dict:
     Herhangi bir dilde çalışır.
     Döner: {"action": str, "value": optional}
     """
-    import google.generativeai as genai
-    genai.configure(api_key=_get_api_key())
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
+    from google.genai import Client
+    from google.genai.types import GenerateContentConfig
+
+    client = Client(api_key=_get_api_key())
 
     available = ", ".join(sorted(ACTION_MAP.keys())) + ", volume_set, type_text, write_on_screen, reload_n, press_key"
 
@@ -528,56 +539,56 @@ Return ONLY valid JSON:
 {{"action": "action_name", "value": null_or_value}}
 
 Examples:
-- "turn up the volume" → {{"action": "volume_up", "value": null}}
-- "set volume to 60" → {{"action": "volume_set", "value": 60}}
-- "sesi 80 yap" → {{"action": "volume_set", "value": 80}}
-- "close the app" → {{"action": "close_app", "value": null}}
-- "uygulamayı kapat" → {{"action": "close_app", "value": null}}
-- "type hello world" → {{"action": "type_text", "value": "hello world"}}
-- "write good morning on screen" → {{"action": "write_on_screen", "value": "good morning"}}
-- "reload page 3 times" → {{"action": "reload_n", "value": 3}}
-- "tam ekran yap" → {{"action": "full_screen", "value": null}}
-- "sesi kıs" → {{"action": "volume_down", "value": null}}
-- "sesi aç" → {{"action": "volume_up", "value": null}}
-- "sustur" → {{"action": "mute", "value": null}}
-- "monte le son" → {{"action": "volume_up", "value": null}}
-- "ekranı kapat" → {{"action": "sleep_display", "value": null}}
-- "monitörü kapat" → {{"action": "sleep_display", "value": null}}
-- "turn off screen" → {{"action": "sleep_display", "value": null}}
-- "turn off monitor" → {{"action": "sleep_display", "value": null}}
-- "bilgisayarı yeniden başlat" → {{"action": "restart", "value": null}}
-- "restart the computer" → {{"action": "restart", "value": null}}
-- "bilgisayarı kapat" → {{"action": "shutdown", "value": null}}
-- "shut down" → {{"action": "shutdown", "value": null}}
-- "ekranı kilitle" → {{"action": "lock_screen", "value": null}}
-- "lock the screen" → {{"action": "lock_screen", "value": null}}
-- "küçült" → {{"action": "minimize", "value": null}}
-- "minimize the window" → {{"action": "minimize", "value": null}}
-- "büyüt" → {{"action": "maximize", "value": null}}
-- "parlaklığı artır" → {{"action": "brightness_up", "value": null}}
-- "parlaklığı azalt" → {{"action": "brightness_down", "value": null}}
-- "increase brightness" → {{"action": "brightness_up", "value": null}}
-- "wifi'yi aç" → {{"action": "toggle_wifi", "value": null}}
-- "toggle wifi" → {{"action": "toggle_wifi", "value": null}}
-- "masaüstünü göster" → {{"action": "show_desktop", "value": null}}
-- "show desktop" → {{"action": "show_desktop", "value": null}}
-- "yeni sekme aç" → {{"action": "new_tab", "value": null}}
-- "sekmeyi kapat" → {{"action": "close_tab", "value": null}}
-- "geri git" → {{"action": "go_back", "value": null}}
-- "ileri git" → {{"action": "go_forward", "value": null}}
-- "sayfayı yenile" → {{"action": "refresh_page", "value": null}}
-- "yakınlaştır" → {{"action": "zoom_in", "value": null}}
-- "uzaklaştır" → {{"action": "zoom_out", "value": null}}
-- "kaydet" → {{"action": "save", "value": null}}
-- "geri al" → {{"action": "undo", "value": null}}
-- "screenshot al" → {{"action": "screenshot", "value": null}}
-- "ekran görüntüsü al" → {{"action": "screenshot", "value": null}}
-- "aşağı kaydır" → {{"action": "scroll_down", "value": null}}
-- "yukarı kaydır" → {{"action": "scroll_up", "value": null}}
-- "karanlık mod" → {{"action": "dark_mode", "value": null}}
-- "press f5" → {{"action": "press_key", "value": "f5"}}
-- "enter'a bas" → {{"action": "enter", "value": null}}
-- "escape'e bas" → {{"action": "escape", "value": null}}
+- "turn up the volume" -> {{"action": "volume_up", "value": null}}
+- "set volume to 60" -> {{"action": "volume_set", "value": 60}}
+- "sesi 80 yap" -> {{"action": "volume_set", "value": 80}}
+- "close the app" -> {{"action": "close_app", "value": null}}
+- "uygulamayı kapat" -> {{"action": "close_app", "value": null}}
+- "type hello world" -> {{"action": "type_text", "value": "hello world"}}
+- "write good morning on screen" -> {{"action": "write_on_screen", "value": "good morning"}}
+- "reload page 3 times" -> {{"action": "reload_n", "value": 3}}
+- "tam ekran yap" -> {{"action": "full_screen", "value": null}}
+- "sesi kıs" -> {{"action": "volume_down", "value": null}}
+- "sesi aç" -> {{"action": "volume_up", "value": null}}
+- "sustur" -> {{"action": "mute", "value": null}}
+- "monte le son" -> {{"action": "volume_up", "value": null}}
+- "ekranı kapat" -> {{"action": "sleep_display", "value": null}}
+- "monitörü kapat" -> {{"action": "sleep_display", "value": null}}
+- "turn off screen" -> {{"action": "sleep_display", "value": null}}
+- "turn off monitor" -> {{"action": "sleep_display", "value": null}}
+- "bilgisayarı yeniden başlat" -> {{"action": "restart", "value": null}}
+- "restart the computer" -> {{"action": "restart", "value": null}}
+- "bilgisayarı kapat" -> {{"action": "shutdown", "value": null}}
+- "shut down" -> {{"action": "shutdown", "value": null}}
+- "ekranı kilitle" -> {{"action": "lock_screen", "value": null}}
+- "lock the screen" -> {{"action": "lock_screen", "value": null}}
+- "küçült" -> {{"action": "minimize", "value": null}}
+- "minimize the window" -> {{"action": "minimize", "value": null}}
+- "büyüt" -> {{"action": "maximize", "value": null}}
+- "parlaklığı artır" -> {{"action": "brightness_up", "value": null}}
+- "parlaklığı azalt" -> {{"action": "brightness_down", "value": null}}
+- "increase brightness" -> {{"action": "brightness_up", "value": null}}
+- "wifi'yi aç" -> {{"action": "toggle_wifi", "value": null}}
+- "toggle wifi" -> {{"action": "toggle_wifi", "value": null}}
+- "masaüstünü göster" -> {{"action": "show_desktop", "value": null}}
+- "show desktop" -> {{"action": "show_desktop", "value": null}}
+- "yeni sekme aç" -> {{"action": "new_tab", "value": null}}
+- "sekmeyi kapat" -> {{"action": "close_tab", "value": null}}
+- "geri git" -> {{"action": "go_back", "value": null}}
+- "ileri git" -> {{"action": "go_forward", "value": null}}
+- "sayfayı yenile" -> {{"action": "refresh_page", "value": null}}
+- "yakınlaştır" -> {{"action": "zoom_in", "value": null}}
+- "uzaklaştır" -> {{"action": "zoom_out", "value": null}}
+- "kaydet" -> {{"action": "save", "value": null}}
+- "geri al" -> {{"action": "undo", "value": null}}
+- "screenshot al" -> {{"action": "screenshot", "value": null}}
+- "ekran görüntüsü al" -> {{"action": "screenshot", "value": null}}
+- "aşağı kaydır" -> {{"action": "scroll_down", "value": null}}
+- "yukarı kaydır" -> {{"action": "scroll_up", "value": null}}
+- "karanlık mod" -> {{"action": "dark_mode", "value": null}}
+- "press f5" -> {{"action": "press_key", "value": "f5"}}
+- "enter'a bas" -> {{"action": "enter", "value": null}}
+- "escape'e bas" -> {{"action": "escape", "value": null}}
 
 IMPORTANT:
 - Always return one of the available actions listed above.
@@ -586,12 +597,15 @@ IMPORTANT:
 - Return ONLY the JSON object, no explanation, no markdown."""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=prompt
+        )
         text = response.text.strip()
         text = __import__("re").sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
         return json.loads(text)
     except Exception as e:
-        print(f"[Settings] ⚠️ Intent detection failed: {e}")
+        logging.getLogger("Settings").warning('️ Intent detection failed: {e}')
         return {"action": description.lower().replace(" ", "_"), "value": None}
 
 def computer_settings(
@@ -627,7 +641,7 @@ def computer_settings(
     if not action:
         return "No action could be determined, sir."
 
-    print(f"[Settings] ⚙️ Action: {action}  Value: {value}")
+    logging.getLogger("Settings").info('️ Action: {action}  Value: {value}')
 
 
     if action == "volume_set":

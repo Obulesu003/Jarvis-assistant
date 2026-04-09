@@ -1,13 +1,15 @@
 # actions/file_controller.py
-# File management — create, delete, move, rename, list, find, organize
+# File management -- create, delete, move, rename, list, find, organize
 
 import shutil
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 import send2trash
 
+
 def _get_desktop() -> Path:
-    """Returns desktop path — works on Windows, Mac, Linux."""
+    """Returns desktop path -- works on Windows, Mac, Linux."""
     return Path.home() / "Desktop"
 
 
@@ -116,9 +118,8 @@ def delete_file(path: str, confirm: bool = True) -> str:
         if target.is_dir():
             shutil.rmtree(target)
             return f"Folder deleted permanently: {target.name}"
-        else:
-            target.unlink()
-            return f"File deleted permanently: {target.name}"
+        target.unlink()
+        return f"File deleted permanently: {target.name}"
 
     except PermissionError:
         return f"Permission denied: {path}"
@@ -140,7 +141,7 @@ def move_file(source: str, destination: str) -> str:
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
-        return f"Moved: {src.name} → {dst.parent.name}/"
+        return f"Moved: {src.name} -> {dst.parent.name}/"
 
     except Exception as e:
         return f"Could not move: {e}"
@@ -165,7 +166,7 @@ def copy_file(source: str, destination: str) -> str:
         else:
             shutil.copy2(str(src), str(dst))
 
-        return f"Copied: {src.name} → {dst.parent.name}/"
+        return f"Copied: {src.name} -> {dst.parent.name}/"
 
     except Exception as e:
         return f"Could not copy: {e}"
@@ -183,7 +184,7 @@ def rename_file(path: str, new_name: str) -> str:
             return f"A file named '{new_name}' already exists."
 
         target.rename(new_path)
-        return f"Renamed: {target.name} → {new_name}"
+        return f"Renamed: {target.name} -> {new_name}"
 
     except Exception as e:
         return f"Could not rename: {e}"
@@ -240,7 +241,7 @@ def find_files(name: str = "", extension: str = "", path: str = "home",
                 if name and name.lower() not in item.name.lower():
                     continue
                 size = _format_size(item.stat().st_size)
-                results.append(f"📄 {item.name} ({size}) — {item.parent}")
+                results.append(f"📄 {item.name} ({size}) -- {item.parent}")
                 if len(results) >= max_results:
                     break
 
@@ -348,7 +349,7 @@ def organize_desktop() -> str:
                 continue
 
             shutil.move(str(item), str(new_path))
-            moved.append(f"{item.name} → {target_dir.name}/")
+            moved.append(f"{item.name} -> {target_dir.name}/")
 
         result = f"Desktop organized. {len(moved)} files moved."
         if moved:
