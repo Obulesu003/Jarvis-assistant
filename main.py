@@ -1129,7 +1129,7 @@ class JarvisLive:
         self._pattern_learner = InteractionPatternLearner()
 
     def _get_memory_bridge(self) -> "MemoryBridge | None":
-        """Lazily initialize MemoryBridge."""
+        """Lazily initialize MemoryBridge (cache result after first failure)."""
         if self._memory_bridge is None:
             try:
                 from memory.j_memory import JARVISMemory
@@ -1139,8 +1139,8 @@ class JarvisLive:
                 self._memory_bridge = MemoryBridge(memory)
             except Exception as e:
                 logging.getLogger("JARVIS").warning(f"[JarvisLive] MemoryBridge unavailable: {e}")
-                self._memory_bridge = None
-        return self._memory_bridge
+                self._memory_bridge = False  # Mark as unavailable — don't retry
+        return self._memory_bridge if self._memory_bridge else None
 
     def stop(self) -> None:
         """Stop the live session and run session review."""

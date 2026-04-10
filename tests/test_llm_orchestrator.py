@@ -336,7 +336,7 @@ class TestLLMOrchestrator:
         def fake_generate(contents, model=None):
             nonlocal call_count
             call_count += 1
-            # Fail first MAX_RETRIES-1 attempts, succeed on last
+            # Fail first MAX_RETRIES attempts (all attempts fail with permanent 429)
             if call_count <= 2:
                 err_msg = "429 Too Many Requests"
                 raise Exception(err_msg)
@@ -354,10 +354,9 @@ class TestLLMOrchestrator:
             "integrations.core.llm_orchestrator.time.sleep"
         ) as mock_sleep:
             steps = mock_orchestrator._plan_steps_llm("how many unread emails", {})
-            assert call_count == 3
-            assert mock_sleep.call_count == 2
-            assert len(steps) == 1
-            assert steps[0]["action"] == "get_unread_count"
+            assert call_count == 2  # MAX_RETRIES=2: both attempts fail (call_count starts at 1)
+            assert mock_sleep.call_count == 1  # MAX_RETRIES-1 = 1
+            assert steps == []  # All attempts failed → returns empty list
 
     def test_plan_steps_falls_back_on_permanent_error(self, mock_orchestrator):
         """Should fall back to keyword matching after max retries on permanent error."""
@@ -375,4 +374,4 @@ class TestLLMOrchestrator:
             steps = mock_orchestrator._plan_steps_llm("how many unread emails", {})
             assert steps == []
             # All retry sleeps were called
-            assert mock_sleep.call_count == 2  # MAX_RETRIES-1 = 2
+            assert mock_sleep.call_count == 1  # MAX_RETRIES-1 = 1

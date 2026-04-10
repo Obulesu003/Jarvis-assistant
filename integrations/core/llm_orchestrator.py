@@ -16,9 +16,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 30-second timeout per request — prevents hangs when API is slow
+REQUEST_TIMEOUT = 30
+
 # Gemini free tier: 5 requests/minute → retry with backoff
-MAX_RETRIES = 3
-INITIAL_BACKOFF = 15  # seconds (gemini free tier resets ~1/min)
+MAX_RETRIES = 2
+INITIAL_BACKOFF = 8  # seconds (reduced from 15 — faster retry on free tier)
 
 # How many recent steps to include as context
 CONTEXT_HISTORY_LIMIT = 5
@@ -44,6 +47,10 @@ class LLMOrchestrator:
         Gemini formats natural response from results
     """
 
+    # Cached capability prompt — rebuilt only when adapters change
+    _capabilities_cache: str = ""
+    _capabilities_cache_key: str = ""
+
     def __init__(self, universal_orchestrator: Any, gemini_key: str | None = None):
         self._orch = universal_orchestrator
         self._gemini_key = gemini_key or self._get_gemini_key()
@@ -51,6 +58,7 @@ class LLMOrchestrator:
         self._client = None  # Lazily initialized for google.genai Client
         self._memory_bridge = None  # Lazily initialized
         self._pattern_learner = None  # Lazily initialized
+        self._gemini_key_cache: str | None = None  # Cache decrypted key
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -409,7 +417,7 @@ class LLMOrchestrator:
         return self._client
 
     def _get_memory_bridge(self):
-        """Lazily initialize the MemoryBridge."""
+        """Lazily initialize and cache the MemoryBridge."""
         if self._memory_bridge is None:
             try:
                 from memory.j_memory import JARVISMemory
@@ -419,19 +427,19 @@ class LLMOrchestrator:
                 self._memory_bridge = MemoryBridge(memory)
             except Exception as e:
                 logger.debug(f"[LLMOrchestrator] MemoryBridge unavailable: {e}")
-                self._memory_bridge = None
-        return self._memory_bridge
+                self._memory_bridge = False  # Mark as unavailable, not None
+        return self._memory_bridge if self._memory_bridge else None
 
     def _get_pattern_learner(self):
-        """Lazily initialize the InteractionPatternLearner."""
+        """Lazily initialize and cache the InteractionPatternLearner."""
         if self._pattern_learner is None:
             try:
                 from core.pattern_learner import InteractionPatternLearner
                 self._pattern_learner = InteractionPatternLearner()
             except Exception as e:
                 logger.debug(f"[LLMOrchestrator] PatternLearner unavailable: {e}")
-                self._pattern_learner = None
-        return self._pattern_learner
+                self._pattern_learner = False  # Mark as unavailable
+        return self._pattern_learner if self._pattern_learner else None
 
     def _get_model(self) -> Any:
         """Get or create the Gemini models interface."""
@@ -441,24 +449,36 @@ class LLMOrchestrator:
         return self._model
 
     def _get_gemini_key(self) -> str:
-        """Get Gemini API key from config."""
+        """Get Gemini API key with in-memory caching (avoids repeated Fernet decryption)."""
+        if self._gemini_key_cache is not None:
+            return self._gemini_key_cache
         try:
             from core.api_key_manager import get_gemini_key
             key = get_gemini_key()
             if key:
+                self._gemini_key_cache = key
                 return key
         except Exception:
             pass
 
         # Try environment variable
-        return os.environ.get("GEMINI_API_KEY", "")
+        key = os.environ.get("GEMINI_API_KEY", "")
+        self._gemini_key_cache = key
+        return key
 
     # ------------------------------------------------------------------ #
     # Prompt Building                                                     #
     # ------------------------------------------------------------------ #
 
     def _build_capability_prompt(self) -> str:
-        """Build a prompt fragment listing all available capabilities."""
+        """Build a prompt fragment listing all available capabilities (cached)."""
+        # Build a cache key from current adapter names
+        adapter_keys = tuple(sorted(self._orch._adapters.keys()))
+        cache_key = str(adapter_keys)
+
+        if cache_key == self._capabilities_cache_key and self._capabilities_cache:
+            return self._capabilities_cache
+
         lines = ["Available actions (ADAPTER.ACTION format):"]
         for name, adapter in self._orch._adapters.items():
             try:
@@ -466,7 +486,9 @@ class LLMOrchestrator:
                     lines.append(f"  {name}.{cap}")
             except Exception:
                 pass
-        return "\n".join(lines)
+        self._capabilities_cache = "\n".join(lines)
+        self._capabilities_cache_key = cache_key
+        return self._capabilities_cache
 
     def _build_context_string(self, context: dict[str, Any]) -> str:
         """Build a context string from the context dict."""
