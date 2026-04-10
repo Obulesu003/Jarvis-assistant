@@ -147,7 +147,7 @@ class ConversationManager:
         if total_chars < SUMMARIZE_CHAR_LIMIT:
             return
 
-        logging.getLogger("ConversationManager").info('Summarizing conversation ({total_chars} chars)')
+        logging.getLogger("ConversationManager").info(f'Summarizing conversation ({total_chars} chars)')
 
         with self._lock:
             turns_snapshot = list(self._turns)
@@ -171,9 +171,9 @@ class ConversationManager:
                     self._turns.append(turn)
 
             self._save_to_disk()
-            logging.getLogger("ConversationManager").info('Conversation condensed: {total_chars} -> ~{len(brief_summary) + sum(len(t.content) for t in recent_turns)} chars')
+            logging.getLogger("ConversationManager").info(f'Conversation condensed: {total_chars} -> ~{len(brief_summary) + sum(len(t.content) for t in recent_turns)} chars')
         except Exception as e:
-            logging.getLogger("ConversationManager").info('Condensation failed: {e}')
+            logging.getLogger("ConversationManager").info(f'Condensation failed: {e}')
 
     def _build_summary_prompt(self, turns: list[Turn], old_summary: str) -> str:
         lines = []
