@@ -14,6 +14,14 @@ class SystemSnapshot:
     Used by JARVIS to proactively volunteer information about system health.
     """
 
+    def __init__(self):
+        # Prime psutil CPU measurement so subsequent calls are non-blocking
+        try:
+            import psutil
+            psutil.cpu_percent()
+        except Exception:
+            pass
+
     def get_all(self) -> dict[str, Any]:
         """
         Get a complete system snapshot.
@@ -40,7 +48,7 @@ class SystemSnapshot:
 
         # CPU
         try:
-            result["cpu"] = psutil.cpu_percent(interval=0.1)
+            result["cpu"] = psutil.cpu_percent(interval=None)  # Non-blocking: returns since last call
         except Exception:
             result["cpu"] = None
 

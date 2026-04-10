@@ -29,6 +29,8 @@ class InteractionPatternLearner:
         self._path = self._dir / "tool_patterns.json"
         self._patterns: dict[str, Any] = self._load()
         self._current_chain: list[str] = []
+        self._last_save_time: float = 0.0
+        self._save_interval: float = 60.0  # Save at most once per 60 seconds
 
     def _load(self) -> dict[str, Any]:
         """Load patterns from disk."""
@@ -40,7 +42,12 @@ class InteractionPatternLearner:
         return {"chains": {}, "feedback": {}}
 
     def _save(self):
-        """Persist patterns to disk."""
+        """Persist patterns to disk (debounced: max once per _save_interval seconds)."""
+        import time as _time
+        now = _time.time()
+        if now - self._last_save_time < self._save_interval:
+            return
+        self._last_save_time = now
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(json.dumps(self._patterns, indent=2))

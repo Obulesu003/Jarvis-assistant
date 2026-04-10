@@ -68,6 +68,13 @@ class ProactiveMonitor:
         self._last_system_health: dict | None = None
         self._last_weather: str | None = None
 
+        # Performance: prime psutil CPU measurement (non-blocking after first call)
+        try:
+            import psutil
+            psutil.cpu_percent()        # First call: initializes measurement
+        except Exception:
+            pass
+
         # Idle detection
         self._idle_since: float = time.time()       # Time of last user interaction
         self._idle_interval: float = 10 * 60         # 10 minutes before friendly ping
@@ -302,12 +309,12 @@ class ProactiveMonitor:
         return {"next_event": None}
 
     def _check_system(self) -> dict:
-        """Check system health metrics."""
+        """Check system health metrics (non-blocking after init)."""
         try:
             import psutil
             battery = psutil.sensors_battery()
             return {
-                "cpu_percent": psutil.cpu_percent(interval=0.5),
+                "cpu_percent": psutil.cpu_percent(interval=None),  # Non-blocking: returns since last call
                 "ram_percent": psutil.virtual_memory().percent,
                 "disk_free_gb": round(psutil.disk_usage("/").free / (1024**3), 1),
                 "battery": battery.percent if battery else None,
