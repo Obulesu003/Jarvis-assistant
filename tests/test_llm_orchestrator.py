@@ -333,7 +333,7 @@ class TestLLMOrchestrator:
 
         call_count = 0
 
-        def fake_generate(content):
+        def fake_generate(contents, model=None):
             nonlocal call_count
             call_count += 1
             # Fail first MAX_RETRIES-1 attempts, succeed on last
@@ -345,11 +345,12 @@ class TestLLMOrchestrator:
                 text = '{"adapter": "outlook", "action": "get_unread_count", "params": {}}'
             return R()
 
-        mock_model = unittest.mock.MagicMock()
-        mock_model.generate_content = fake_generate
-        mock_orchestrator._model = mock_model
+        mock_client = unittest.mock.MagicMock()
+        mock_client.models.generate_content = fake_generate
 
-        with unittest.mock.patch(
+        with unittest.mock.patch.object(
+            mock_orchestrator, "_get_client", return_value=mock_client
+        ), unittest.mock.patch(
             "integrations.core.llm_orchestrator.time.sleep"
         ) as mock_sleep:
             steps = mock_orchestrator._plan_steps_llm("how many unread emails", {})
@@ -362,11 +363,12 @@ class TestLLMOrchestrator:
         """Should fall back to keyword matching after max retries on permanent error."""
         import unittest.mock
 
-        mock_model = unittest.mock.MagicMock()
-        mock_model.generate_content.side_effect = Exception("429 Too Many Requests")
-        mock_orchestrator._model = mock_model
+        mock_client = unittest.mock.MagicMock()
+        mock_client.models.generate_content.side_effect = Exception("429 Too Many Requests")
 
-        with unittest.mock.patch(
+        with unittest.mock.patch.object(
+            mock_orchestrator, "_get_client", return_value=mock_client
+        ), unittest.mock.patch(
             "integrations.core.llm_orchestrator.time.sleep"
         ) as mock_sleep:
             # Directly test _plan_steps_llm returns [] after exhausting retries

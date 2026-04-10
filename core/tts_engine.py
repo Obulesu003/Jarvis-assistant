@@ -4,11 +4,40 @@ Fast, natural-sounding, CPU-only. British voice for JARVIS feel.
 """
 import logging
 import subprocess
-import numpy as np
 import threading
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
+
+
+class EmotionTone(Enum):
+    """
+    Emotional tone modifiers for JARVIS TTS.
+    Speed and pitch multipliers adjust how Piper speaks.
+    """
+
+    CALM = ("calm", 0.95, 1.0)
+    EXCITED = ("excited", 1.2, 1.1)
+    APOLOGETIC = ("apologetic", 0.85, 0.95)
+    URGENT = ("urgent", 1.3, 1.05)
+    WHISPERED = ("whispered", 0.7, 0.85)
+    NORMAL = ("normal", 1.0, 1.0)
+
+    def __init__(self, label: str, speed: float, pitch: float):
+        self.label = label
+        self.speed = speed
+        self.pitch = pitch
+
+
+@dataclass
+class VoiceEmotion:
+    """Tracks JARVIS's emotional state for TTS modulation."""
+    tone: EmotionTone = EmotionTone.NORMAL
+    intensity: float = 1.0  # 0.0 to 2.0
 
 
 class TTSEngine:
@@ -23,6 +52,19 @@ class TTSEngine:
         self._is_installed = None
         self._process: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._emotion = VoiceEmotion()
+
+    def set_emotion(self, tone: EmotionTone) -> None:
+        """Set JARVIS's emotional tone for the next spoken phrase."""
+        self._emotion.tone = tone
+
+    def reset_emotion(self) -> None:
+        """Reset to normal tone after emotional phrase."""
+        self._emotion.tone = EmotionTone.NORMAL
+
+    def get_emotion(self) -> VoiceEmotion:
+        """Get the current emotional state."""
+        return self._emotion
 
     def _check_installation(self) -> bool:
         """Check if Piper CLI is available."""
@@ -88,10 +130,23 @@ class TTSEngine:
                 self.is_speaking = False
 
     def _play_audio(self, audio: np.ndarray, samplerate: int = 22050):
-        """Play audio through speakers using sounddevice."""
+        """Play audio through speakers using sounddevice, with emotion modulation."""
         try:
             import sounddevice as sd
-            sd.play(audio, samplerate=samplerate)
+
+            tone = self._emotion.tone
+            if tone != EmotionTone.NORMAL:
+                # Adjust playback speed (simulates speaking rate)
+                adjusted_sr = int(samplerate / tone.speed)
+                # Pitch shift via simple resampling (lightweight approximation)
+                if tone.pitch != 1.0:
+                    indices = np.arange(0, len(audio), tone.pitch)
+                    audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+                self.reset_emotion()
+            else:
+                adjusted_sr = samplerate
+
+            sd.play(audio, samplerate=adjusted_sr)
             sd.wait()
         except ImportError:
             logger.warning("[TTS] sounddevice not installed")

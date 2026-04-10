@@ -7,8 +7,9 @@ Supports:
   - Output parsing and speech-friendly formatting
   - Claude Code CLI control via the `claude_tool` action
 """
-import logging  # migrated from print()
 from __future__ import annotations
+
+import logging  # migrated from print()
 
 import json
 import re

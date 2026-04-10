@@ -1,6 +1,6 @@
 """
 audio_pipeline.py - Complete JARVIS audio loop.
-openWakeWord → Silero VAD → Faster-Whisper → Gemini → Piper TTS
+openWakeWord -> Silero VAD -> Faster-Whisper -> Gemini -> Piper TTS
 
 Local audio processing, <500ms response latency. All CPU-friendly.
 """
@@ -17,17 +17,18 @@ logger = logging.getLogger(__name__)
 class JARVISAudioPipeline:
     """
     Complete local audio pipeline wired together.
-    openWakeWord → Silero VAD → Faster-Whisper → Gemini → Piper TTS
+    openWakeWord -> Silero VAD -> Faster-Whisper -> Gemini -> Piper TTS
 
     All local except Gemini. <500ms response latency.
     """
 
     def __init__(
         self,
-        on_transcript: Callable[[str], None] | None = None,
+        on_transcript: Callable[..., None] | None = None,
         on_response: Callable[[str], None] | None = None,
         gemini_client=None,
-    ):
+        on_emotion: Callable[..., None] | None = None,
+    ) -> None:
         self._wake_word = None
         self._vad = None
         self._stt = None
@@ -36,7 +37,8 @@ class JARVISAudioPipeline:
 
         # Callbacks
         self.on_transcript = on_transcript  # Called when user speech is transcribed
-        self.on_response = on_response      # Called when JARVIS wants to speak
+        self.on_response = on_response    # Called when JARVIS wants to speak
+        self.on_emotion = on_emotion     # Called when emotion is detected
 
         # State
         self._is_listening = True
@@ -55,6 +57,17 @@ class JARVISAudioPipeline:
 
         # Background thread
         self._thread: threading.Thread | None = None
+
+        # --- Continuous Conversation Mode ---
+        # After wake word, stay "engaged" for 60 seconds. Skip wake word
+        # detection while engaged. User speech resets and extends the timer.
+        self._is_engaged: bool = False
+        self._engaged_since: float = 0.0
+        self._engaged_timeout: float = 60.0       # seconds
+        self._last_user_speech_time: float = 0.0
+
+        # Idle detection - detect when user has been silent a long time
+        self._idle_threshold: float = 120.0       # 2 minutes
 
     def initialize(self):
         """Initialize all audio components."""
@@ -107,14 +120,70 @@ class JARVISAudioPipeline:
 
             with self._stream:
                 while self._is_listening:
+                    self._check_engagement_timeout()
                     time.sleep(0.01)
         except ImportError:
             logger.error("[AudioPipeline] sounddevice not installed. Run: pip install sounddevice numpy")
         except Exception as e:
             logger.error(f"[AudioPipeline] Stream error: {e}")
 
+    def _check_engagement_timeout(self):
+        """Check if engaged mode has timed out."""
+        if not self._is_engaged:
+            return
+
+        elapsed = time.time() - self._engaged_since
+        if elapsed > self._engaged_timeout:
+            logger.info("[AudioPipeline] Engagement timed out, returning to idle")
+            self._is_engaged = False
+            self._state = "idle"
+
+    def set_engaged(self):
+        """
+        Activate continuous conversation mode after wake word detection.
+        Bypasses wake word detection for _engaged_timeout seconds.
+        """
+        self._is_engaged = True
+        self._engaged_since = time.time()
+        self._last_user_speech_time = time.time()
+        logger.info("[AudioPipeline] Continuous conversation mode engaged")
+
+    def extend_engagement(self):
+        """Extend the engaged timeout from current time."""
+        self._engaged_since = time.time()
+        logger.debug("[AudioPipeline] Engagement extended")
+
+    def on_user_speech_detected(self):
+        """Called when user speech is detected. Extends engagement window."""
+        self._last_user_speech_time = time.time()
+        if self._is_engaged:
+            self.extend_engagement()
+
+    def on_speaking_finished(self):
+        """Called when JARVIS finishes speaking. Stay in engaged mode."""
+        self._is_engaged = True
+        self._engaged_since = time.time()
+        self._last_user_speech_time = time.time()
+
+    def get_engagement_status(self) -> dict:
+        """
+        Get the current engagement status.
+
+        Returns:
+            Dictionary with is_engaged, seconds_remaining, and state
+        """
+        if self._is_engaged:
+            remaining = max(0.0, self._engaged_timeout - (time.time() - self._engaged_since))
+        else:
+            remaining = 0.0
+        return {
+            "is_engaged": self._is_engaged,
+            "seconds_remaining": round(remaining, 1),
+            "state": self._state,
+        }
+
     def _process_state(self):
-        """State machine: idle → woken → listening → processing → idle."""
+        """State machine: idle -> woken -> listening -> processing -> idle."""
         import numpy as np
 
         if len(self._audio_buffer) < 512:
@@ -126,22 +195,35 @@ class JARVISAudioPipeline:
         if self._is_speaking:
             return
 
+        # --- Continuous Conversation: skip wake word when engaged ---
         if self._state == "idle":
-            # Wait for wake word
+            if self._is_engaged:
+                # Engaged mode: look for VAD speech directly
+                if self._vad.is_speech(latest):
+                    self._state = "listening"
+                    self._speech_buffer.clear()
+                    self._speech_buffer.extend(list(self._audio_buffer)[-24000:])
+                    self._speech_start_time = time.time()
+                    self.on_user_speech_detected()
+                    logger.info("[AudioPipeline] [Engaged] Speech detected")
+                return
+
+            # Normal mode: wait for wake word
             wake = self._wake_word.detect(latest)
             if wake:
                 self._state = "woken"
                 self._wake_activated_time = time.time()
                 self._tts.speak_async("Yes, sir?")
+                self.set_engaged()
                 logger.info("[AudioPipeline] Wake word detected")
 
         elif self._state == "woken":
             if self._vad.is_speech(latest):
                 self._state = "listening"
                 self._speech_buffer.clear()
-                # Capture last 1.5s of audio before speech started
                 self._speech_buffer.extend(list(self._audio_buffer)[-24000:])
                 self._speech_start_time = time.time()
+                self.on_user_speech_detected()
                 logger.info("[AudioPipeline] Speech detected")
             elif time.time() - self._wake_activated_time > 3:
                 self._state = "idle"
@@ -152,14 +234,33 @@ class JARVISAudioPipeline:
                 self._silence_frames = 0
             else:
                 self._silence_frames += 1
-                # ~800ms of silence (25 frames × 32ms) = end of utterance
-                if self._silence_frames > 25:
+                # Only trigger on genuine silence: check RMS energy
+                rms = float(np.sqrt(np.mean(latest**2)))
+                # Short silence (~500ms, 15 frames × 32ms) for normal speech
+                # Long silence (~1500ms) for complex utterances
+                # Use RMS to distinguish genuine silence from pauses/background noise
+                if self._silence_frames > 15 and rms < 0.01:
                     self._state = "processing"
 
         elif self._state == "processing":
             self._is_speaking = True
             speech_audio = np.array(list(self._speech_buffer), dtype=np.float32)
             self._speech_buffer.clear()
+
+            # Detect emotion from speech before transcription
+            emotion_tone = None
+            try:
+                from core.emotion_detector import EmotionDetector
+                detector = EmotionDetector()
+                metrics = detector.analyze(speech_audio)
+                if metrics.confidence > 0.6:
+                    emotion_tone = detector.emotion_to_tone(metrics.emotion)
+                    logger.debug(
+                        f"[AudioPipeline] Emotion: {metrics.emotion.value} "
+                        f"(conf={metrics.confidence:.2f}, rms={metrics.rms:.4f})"
+                    )
+            except Exception:
+                pass  # Emotion detection is optional
 
             text = self._stt.transcribe(speech_audio)
             self._state = "idle"
@@ -168,7 +269,9 @@ class JARVISAudioPipeline:
             if text.strip():
                 logger.info(f"[AudioPipeline] User: {text}")
                 if self.on_transcript:
-                    self.on_transcript(text)
+                    self.on_transcript(text, emotion_tone=emotion_tone)
+                if emotion_tone and self.on_emotion:
+                    self.on_emotion(emotion_tone)
             else:
                 logger.info("[AudioPipeline] No speech detected")
 

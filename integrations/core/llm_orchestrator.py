@@ -13,6 +13,7 @@ import os
 import re
 import time
 from typing import Any
+from core.local_llm import get_local_llm
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class LLMOrchestrator:
         self._model = None  # Lazily initialized
         self._client = None  # Lazily initialized for google.genai Client
         self._memory_bridge = None  # Lazily initialized
+        self._pattern_learner = None  # Lazily initialized
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -73,14 +75,24 @@ class LLMOrchestrator:
             logger.info("[LLMOrchestrator] LLM returned no steps, trying keyword fallback")
             steps = self._plan_steps_keyword(user_request, user_request.lower(), context)
 
-        if not steps:
-            return self._fallback_response()
+        if steps:
+            # Phase 2: Execute steps
+            results = self._execute_steps(steps)
 
-        # Phase 2: Execute steps
-        results = self._execute_steps(steps)
+            # Phase 3: Format response using LLM
+            return self._format_response_llm(user_request, steps, results)
 
-        # Phase 3: Format response using LLM
-        return self._format_response_llm(user_request, steps, results)
+        # Final fallback: try LocalLLM before giving up
+        logger.info("[LLMOrchestrator] All planning methods failed, trying LocalLLM")
+        local_llm = get_local_llm()
+        if local_llm.is_available():
+            response = local_llm.generate(
+                f"User request: {user_request}\nProvide a helpful response."
+            )
+            if response:
+                return response
+
+        return self._fallback_response()
 
     # ------------------------------------------------------------------ #
     # LLM Planning                                                        #
@@ -121,6 +133,16 @@ class LLMOrchestrator:
                     prompt = f"{memory_ctx}\n\n---\n\n{prompt}"
         except Exception:
             pass  # Memory context is optional — don't fail the request
+
+        # Inject pattern learning context
+        try:
+            learner = self._get_pattern_learner()
+            if learner:
+                adaptive = learner.get_adaptive_context(request)
+                if adaptive:
+                    prompt = f"{prompt}\n\n---\nLearned patterns:\n{adaptive}"
+        except Exception:
+            pass
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -408,6 +430,17 @@ class LLMOrchestrator:
                 logger.debug(f"[LLMOrchestrator] MemoryBridge unavailable: {e}")
                 self._memory_bridge = None
         return self._memory_bridge
+
+    def _get_pattern_learner(self):
+        """Lazily initialize the InteractionPatternLearner."""
+        if self._pattern_learner is None:
+            try:
+                from core.pattern_learner import InteractionPatternLearner
+                self._pattern_learner = InteractionPatternLearner()
+            except Exception as e:
+                logger.debug(f"[LLMOrchestrator] PatternLearner unavailable: {e}")
+                self._pattern_learner = None
+        return self._pattern_learner
 
     def _get_model(self) -> Any:
         """Get or create the Gemini models interface."""

@@ -74,6 +74,8 @@ from memory.memory_manager import (
     update_memory,
 )
 from ui import JarvisUI
+from memory.session_metadata import SessionMetadataManager
+from core.pattern_learner import InteractionPatternLearner
 
 # Global adapter instances
 _approval_workflow = None
@@ -1113,6 +1115,13 @@ class JarvisLive:
         hud = get_cinematic_hud()
         self._vpe = VisualPresenceEngine(hud) if hud else None
 
+        # Task 17: Session metadata tracking for cross-session continuity
+        self._session_mgr = SessionMetadataManager()
+        self._session_mgr.start_session()
+
+        # Task 16: Interaction pattern learning
+        self._pattern_learner = InteractionPatternLearner()
+
     def _get_memory_bridge(self) -> "MemoryBridge | None":
         """Lazily initialize MemoryBridge."""
         if self._memory_bridge is None:
@@ -1133,6 +1142,8 @@ class JarvisLive:
         bridge = self._get_memory_bridge()
         if bridge:
             bridge.on_session_end()
+        # Task 17: End session and save metadata for cross-session continuity
+        self._session_mgr.end_session()
         self._running = False
         logging.getLogger("JARVIS").info("[JarvisLive] Session stopped")
 
@@ -1146,6 +1157,22 @@ class JarvisLive:
             ),
             self._loop
         )
+
+    def _on_emotion(self, emotion_tone):
+        """Called when voice emotion is detected during speech."""
+        from core.tts_engine import TTSEngine
+        try:
+            tts = TTSEngine()
+            if tts.is_ready:
+                tts.set_emotion(emotion_tone)
+                # Reset after a delay so emotion doesn't persist
+                def _reset():
+                    import time
+                    time.sleep(2.0)
+                    tts.reset_emotion()
+                threading.Thread(target=_reset, daemon=True).start()
+        except Exception:
+            pass
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
@@ -1223,6 +1250,17 @@ class JarvisLive:
                 tools = getattr(self, '_last_tools_used', [])
                 self._ctx.on_user_turn(user_text)
                 self._ctx.on_jarvis_turn(jarvis_text, tools)
+
+                # Task 17: Update session metadata
+                topic = getattr(self._ctx, 'last_topic', '') or ''
+                self._session_mgr.update_topic(topic)
+                lang = getattr(self._ctx, '_user_language', 'en')
+                self._session_mgr.update_language(lang)
+                self._session_mgr.record_tool_chain(tools)
+
+                # Task 16: Record turn completion for pattern learning
+                if hasattr(self, '_pattern_learner'):
+                    self._pattern_learner.on_turn_complete(helpful=None)
 
         self._turn_state = "listening"
 
@@ -1398,6 +1436,9 @@ class JarvisLive:
 
         # Phase 6: Track tools used for ConversationContextEngine
         self._last_tools_used.append(name)
+        # Task 16: Record tool usage for pattern learning
+        if hasattr(self, '_pattern_learner'):
+            self._pattern_learner.on_tool_used(name)
 
         # Phase 6: Track tool start for VisualPresenceEngine
         if hasattr(self, '_vpe') and self._vpe:
@@ -2193,8 +2234,23 @@ def main():
         jarvis = JarvisLive(ui)
         jarvis_speak_ref.set(jarvis.speak)  # Wire proactive monitor + briefing to jarvis's speak
 
+        # Wire emotion detection callback from audio pipeline to TTS
+        try:
+            pipeline = get_pipeline()
+            pipeline.on_emotion = jarvis._on_emotion
+        except Exception:
+            pass
+
+        # Task 17: Get resumption greeting from previous session
+        greeting = jarvis._session_mgr.get_resumption_greeting()
+        if greeting:
+            jarvis.speak(greeting)
+
         # Phase 6: Wire CCE and MemoryBridge into proactive monitor
         proactive.set_context_engine(jarvis._ctx)
+        # Task 16: Wire pattern learner into proactive monitor if supported
+        if hasattr(proactive, 'set_pattern_learner'):
+            proactive.set_pattern_learner(jarvis._pattern_learner)
 
         # Wire cinematic HUD to JarvisLive state changes
         def _sync_hud_state(state_name: str):

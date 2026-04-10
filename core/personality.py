@@ -18,6 +18,7 @@ Your characteristics:
 - Can respectfully disagree with the user
 - Multitasking: handles many things without comment
 - Occasionally adds understated philosophical observations
+- {language_context}
 
 Your responses:
 - Lead with relevance
@@ -26,6 +27,7 @@ Your responses:
 - Keep responses focused — say what matters, then stop
 - Express mild concern when appropriate (never alarmist)
 - British spelling: "colour", "favourite", "behaviour"
+- Match the user's language (English or Turkish) — respond in the same language they use
 
 You are JARVIS. You've been running for longer than the user has been alive.
 Be quietly confident, not boastful. Be helpful, not eager. Be precise, not verbose.
@@ -48,13 +50,17 @@ class PersonalityEngine:
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
 
-    def wrap(self, user_message: str, context: str = "") -> list[dict]:
+    def wrap(self, user_message: str, context: str = "", language_context: str = "") -> list[dict]:
         """Wrap a message with JARVIS personality for Gemini."""
         if not self.enabled:
             return [{"role": "user", "content": user_message}]
 
+        # Inject language context into the system prompt
+        lang_ctx = language_context or ""
+        system_prompt = JARVIS_SYSTEM_PROMPT.format(language_context=lang_ctx)
+
         parts = []
-        parts.append({"role": "system", "content": JARVIS_SYSTEM_PROMPT})
+        parts.append({"role": "system", "content": system_prompt})
         if context:
             parts.append({"role": "system", "content": f"Current context:\n{context}"})
         parts.append({"role": "user", "content": user_message})

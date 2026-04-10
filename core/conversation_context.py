@@ -1,13 +1,59 @@
 """
 ConversationContextEngine - Tracks conversational state across turns and enables proactive volunteering.
 """
-
 import logging
 import time
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from memory.memory_manager import JARVISMemory
+
+logger = logging.getLogger(__name__)
+
+# Language detection word lists
+ENGLISH_WORDS = frozenset([
+    "the", "be", "to", "of", "and", "a", "in", "that", "have", "i",
+    "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
+    "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
+    "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
+    "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
+    "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
+    "people", "into", "year", "your", "good", "some", "could", "them", "see",
+    "other", "than", "then", "now", "look", "only", "come", "its", "over",
+    "think", "also", "back", "after", "use", "two", "how", "our", "work",
+    "first", "well", "way", "even", "new", "want", "because", "any", "these",
+    "give", "day", "most", "us", "hello", "hi", "hey", "check", "show", "send",
+    "weather", "email", "calendar", "reminder", "search", "open", "play", "call",
+    "thanks", "fine", "okay", "ok", "great", "awesome",
+])
+
+TURKISH_WORDS = frozenset([
+    "bir", "ve", "bu", "da", "de", "için", "ile", "ne", "var", "yok",
+    "ben", "sen", "o", "biz", "siz", "onlar", "kim", "kime", "nerede", "nasıl",
+    "bugün", "yarın", "dün", "şimdi", "sonra", "önce", "daha", "çok", "az",
+    "gün", "ay", "yıl", "saat", "dakika", "evet", "hayır", "merhaba", "selam",
+    "naber", "nasılsın", "iyiyim", "teşekkür", "tşk", "lütfen", "rica", "edermisin",
+    "yap", "yapabilir", "mi", "mı", "mu", "mü", "eğer", "ama", "fakat", "veya",
+    "çünkü", "o", "şu", "bunu", "şunu", "kendine", "kendim", "hangi", "kaç",
+    "ev", "iş", "okul", "araba", "telefon", "bilgisayar", "su", "yiyecek",
+    "hava", "durumu", "gelecek", "plan", "toplantı", "randevu", "hatırlat",
+    "mail", "eposta", "mesaj", "ara", "bul", "getir", "göster", "söyle", "anlat",
+])
+
+
+@dataclass
+class LanguageContext:
+    """Tracks language state for multilingual support."""
+    primary: str = "en"  # en | tr | mixed
+    confidence: float = 0.5
+    history: list = None
+
+    def __post_init__(self):
+        if self.history is None:
+            self.history = []
 
 
 class ConversationContextEngine:
@@ -27,6 +73,8 @@ class ConversationContextEngine:
         self.last_topic: str | None = None
         self.last_volunteer_at: float = 0.0
         self._memory: "JARVISMemory | None" = None
+        self._language_context = LanguageContext()
+        self._user_language: str = "en"
 
     def inject_memory(self, memory: "JARVISMemory") -> None:
         """
@@ -88,6 +136,77 @@ class ConversationContextEngine:
         self.interrupted = False
         self.interrupted_text = ""
 
+    def detect_and_track_language(self, text: str) -> str:
+        """
+        Detect the language of the input text and update tracking.
+
+        Args:
+            text: Input text to analyze
+
+        Returns:
+            Language code: "en", "tr", or "mixed"
+        """
+        if not text or not text.strip():
+            return self._user_language
+
+        text_lower = text.lower()
+        words = text_lower.split()
+
+        en_count = sum(1 for w in words if w in ENGLISH_WORDS)
+        tr_count = sum(1 for w in words if w in TURKISH_WORDS)
+
+        total = en_count + tr_count
+        if total == 0:
+            return self._user_language
+
+        en_ratio = en_count / total
+        tr_ratio = tr_count / total
+
+        if en_ratio > 0.7:
+            detected = "en"
+        elif tr_ratio > 0.7:
+            detected = "tr"
+        else:
+            detected = "mixed"
+
+        self._user_language = detected
+        self._language_context.history.append(detected)
+        if len(self._language_context.history) > 5:
+            self._language_context.history.pop(0)
+
+        return detected
+
+    def get_language_context(self) -> str:
+        """
+        Get a language context string for LLM injection.
+
+        Returns:
+            A language guidance string for the current language
+        """
+        if self._user_language == "tr":
+            return (
+                "The user is communicating primarily in Turkish. "
+                "Respond in Turkish with a respectful, formal tone. "
+                "Use Turkish grammar and vocabulary naturally."
+            )
+        elif self._user_language == "mixed":
+            return (
+                "The user is mixing languages. Match their language mix naturally. "
+                "You may respond in either language or mix as they do."
+            )
+        else:
+            return ""
+
+    def update_language(self, lang: str) -> None:
+        """
+        Manually update the user's preferred language.
+
+        Args:
+            lang: Language code (en, tr, mixed)
+        """
+        self._user_language = lang
+        self._language_context.primary = lang
+
     def should_volunteer(self) -> bool:
         """
         Determine if JARVIS should proactively volunteer information.
@@ -111,7 +230,6 @@ class ConversationContextEngine:
         if self._significant_change_detected() or self._user_likely_available():
             return True
 
-        # Default: no volunteer needed
         return False
 
     def volunteer_topic(self) -> str | None:
@@ -154,36 +272,40 @@ class ConversationContextEngine:
         return None
 
     def _check_new_emails(self) -> str | None:
-        """
-        Check for new emails that should be volunteered.
-
-        Returns:
-            A message about new emails, or None
-        """
-        if self._memory is None:
-            return None
-        # Placeholder - actual implementation would check email service
+        """Check for new emails that should be volunteered."""
+        try:
+            outlook = __import__(
+                "integrations.outlook.outlook_native_adapter",
+                fromlist=["OutlookNativeAdapter"],
+            )
+            adapter = outlook.OutlookNativeAdapter()
+            result = adapter.execute_action("get_unread_count", {}) or 0
+            if result and result > 0:
+                return f"You have {result} unread message{'s' if result > 1 else ''}."
+        except Exception as e:
+            logger.debug(f"[ContextEngine] Email check failed: {e}")
         return None
 
     def _upcoming_event(self) -> str | None:
-        """
-        Check for upcoming calendar events that should be volunteered.
-
-        Returns:
-            A message about an upcoming event, or None
-        """
-        if self._memory is None:
-            return None
-        # Placeholder - actual implementation would check calendar
+        """Check for upcoming calendar events within the next 2 hours."""
+        try:
+            cal = __import__(
+                "integrations.calendar.calendar_adapter",
+                fromlist=["CalendarAdapter"],
+            )
+            adapter = cal.CalendarAdapter()
+            events = adapter.get_upcoming_events(hours=2) or []
+            if events:
+                ev = events[0]
+                title = ev.get("title", "an event")
+                start = ev.get("start", "")
+                return f"Sir, you have {title} starting at {start}."
+        except Exception as e:
+            logger.debug(f"[ContextEngine] Calendar check failed: {e}")
         return None
 
     def _memory_recall_suggestion(self) -> str | None:
-        """
-        Check memory for relevant recall suggestions.
-
-        Returns:
-            A memory recall suggestion, or None
-        """
+        """Check memory for relevant recall suggestions."""
         if self._memory is None:
             return None
         try:
@@ -192,17 +314,55 @@ class ConversationContextEngine:
                 return f"You were working on {topic}. Would you like to continue?"
         except (AttributeError, TypeError) as e:
             logger.debug(f"[ContextEngine] Memory recall failed: {e}")
-            return None
         return None
 
     def _system_health_check(self) -> str | None:
-        """
-        Check system health for issues that should be volunteered.
+        """Check system health for issues that should be volunteered."""
+        try:
+            import psutil
 
-        Returns:
-            A message about system health, or None
-        """
-        # Placeholder - actual implementation would check system metrics
+            messages = []
+
+            # Battery low
+            try:
+                battery = psutil.sensors_battery()
+                if battery and not battery.power_plugged and battery.percent < 20:
+                    messages.append(f"battery is at {battery.percent} percent")
+            except Exception:
+                pass
+
+            # CPU high
+            try:
+                cpu = psutil.cpu_percent(interval=0.1)
+                if cpu > 90:
+                    messages.append(f"CPU usage is at {cpu:.0f} percent")
+            except Exception:
+                pass
+
+            # Memory high
+            try:
+                mem = psutil.virtual_memory()
+                if mem.percent > 90:
+                    messages.append(f"memory is at {mem.percent:.0f} percent")
+            except Exception:
+                pass
+
+            if messages:
+                if self._user_language == "tr":
+                    verbs = {
+                        "battery is at": "pil şarjı",
+                        "CPU usage is at": "işlemci kullanımı",
+                        "memory is at": "bellek kullanımı",
+                    }
+                    tr_messages = []
+                    for m in messages:
+                        for en, tr in verbs.items():
+                            if en in m:
+                                tr_messages.append(m.replace(en, tr))
+                    return f"Sir, {', '.join(tr_messages)}."
+                return f"Sir, {', '.join(messages)}."
+        except Exception as e:
+            logger.debug(f"[ContextEngine] Health check failed: {e}")
         return None
 
     def _significant_change_detected(self) -> bool:
@@ -227,16 +387,12 @@ class ConversationContextEngine:
         """
         Extract a topic/keyword summary from the user's input.
 
-        Extracts words longer than 4 characters (up to 3), or falls back
-        to the first 30 characters of the text.
-
         Args:
             text: The user's input text
 
         Returns:
             A topic string
         """
-        # Split into words and filter for significant words (>4 chars)
         words = text.split()
         significant_words = [w for w in words if len(w) > 4]
 
@@ -263,14 +419,12 @@ class ConversationContextEngine:
             "whatsapp": "sending a WhatsApp message",
         }
 
-        # Return description for first matching tool
         for tool in tools_used:
             tool_lower = tool.lower()
             for key, description in tool_descriptions.items():
                 if key in tool_lower:
                     return description
 
-        # Fallback: use first tool name
         if tools_used:
             return f"working on: {tools_used[0]}"
 

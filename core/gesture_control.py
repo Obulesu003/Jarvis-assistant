@@ -40,6 +40,8 @@ class GestureController:
         self._thread: threading.Thread | None = None
         self._last_gesture_time = 0.0
         self._gesture_cooldown = 3.0  # seconds between gesture reactions
+        self._ctx = None
+        self._do_not_disturb = False
 
     def initialize(self):
         """Initialize MediaPipe Hands."""
@@ -167,5 +169,42 @@ class GestureController:
             if self._speak:
                 self._speak("Silence mode active.")
         elif action == "cancel":
+            self.skip_current_notification()
             if self._speak:
                 self._speak("Cancelled.")
+
+    def is_do_not_disturb(self) -> bool:
+        """Return current DND state."""
+        return self._do_not_disturb
+
+    def set_conversation_context(self, ctx) -> None:
+        """
+        Wire the ConversationContextEngine into gesture control.
+
+        Args:
+            ctx: ConversationContextEngine instance
+        """
+        self._ctx = ctx
+
+    def set_do_not_disturb(self, enabled: bool) -> None:
+        """
+        Enable or disable proactive volunteering via gestures.
+
+        Args:
+            enabled: True = silence proactive alerts
+        """
+        self._do_not_disturb = enabled
+
+    def skip_current_notification(self) -> bool:
+        """
+        Skip/dismiss the current proactive notification.
+
+        Returns:
+            True if a notification was skipped
+        """
+        if hasattr(self, "_ctx") and self._ctx:
+            self._ctx.last_volunteer_at = time.time()  # Reset volunteer timer
+            logger.info("[Gesture] Skipped current proactive notification")
+            return True
+        return False
+

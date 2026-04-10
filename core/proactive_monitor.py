@@ -58,6 +58,8 @@ class ProactiveMonitor:
         self._running = False
         from core.conversation_context import ConversationContextEngine
         self._ctx: ConversationContextEngine | None = None
+        from core.pattern_learner import InteractionPatternLearner
+        self._pattern_learner: InteractionPatternLearner | None = None
         self._thread: threading.Thread | None = None
 
         # State tracking (only speak on CHANGES)
@@ -108,6 +110,10 @@ class ProactiveMonitor:
     def set_context_engine(self, ctx: "ConversationContextEngine"):
         """Inject the ConversationContextEngine from JarvisLive."""
         self._ctx = ctx
+
+    def set_pattern_learner(self, learner: "InteractionPatternLearner"):
+        """Inject the InteractionPatternLearner from JarvisLive."""
+        self._pattern_learner = learner
 
     def _get_speak(self):
         """Get the current speak function."""
