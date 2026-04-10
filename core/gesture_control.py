@@ -44,18 +44,27 @@ class GestureController:
         self._do_not_disturb = False
 
     def initialize(self):
-        """Initialize MediaPipe Hands."""
+        """Initialize MediaPipe HandLandmarker (Tasks API)."""
         try:
-            import mediapipe as mp
-            self._mp_hands = mp.solutions.hands
-            self._hands = self._mp_hands.Hands(
-                max_num_hands=1,
-                min_detection_confidence=0.7,
+            from mediapipe.tasks import python
+            from mediapipe.tasks.python import vision
+
+            base_options = python.BaseOptions(model_asset_path="models/hand_landmarker.task")
+            options = vision.HandLandmarkerOptions(
+                base_options=base_options,
+                running_mode=vision.RunningMode.VIDEO,
+                num_hands=1,
+                min_hand_detection_confidence=0.7,
+                min_hand_presence_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
-            logger.info("[Gesture] MediaPipe Hands initialized")
+            self._hands = vision.HandLandmarker.create_from_options(options)
+            logger.info("[Gesture] MediaPipe HandLandmarker initialized")
         except ImportError:
             logger.warning("[Gesture] mediapipe not installed. Run: pip install mediapipe")
+            self._hands = None
+        except Exception as e:
+            logger.warning(f"[Gesture] MediaPipe Hands unavailable: {e}")
             self._hands = None
 
     def start(self):
@@ -80,30 +89,62 @@ class GestureController:
             self._camera = None
 
     def _loop(self):
-        """Main camera loop."""
+        """Main camera loop using MediaPipe Tasks LIVE_STREAM mode."""
         try:
             import cv2
+            from mediapipe import ImageFormat
+            from mediapipe.tasks import python
+            from mediapipe.tasks.python import vision
+
+            # Results buffer for async callback
+            self._gesture_results = []
+
+            def on_results_callback(result, output_image, timestamp_ms):
+                self._gesture_results.append(result)
+
+            # Recreate with callback mode
+            base_options = python.BaseOptions(model_asset_path="models/hand_landmarker.task")
+            options = vision.HandLandmarkerOptions(
+                base_options=base_options,
+                running_mode=vision.RunningMode.LIVE_STREAM,
+                num_hands=1,
+                min_hand_detection_confidence=0.7,
+                min_hand_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+                result_callback=on_results_callback,
+            )
+            hands = vision.HandLandmarker.create_from_options(options)
+
             self._camera = cv2.VideoCapture(0)
             if not self._camera.isOpened():
                 logger.warning("[Gesture] Camera not available")
+                hands.close()
                 return
 
+            timestamp_ms = 0
             while self._running:
                 ret, frame = self._camera.read()
                 if not ret:
                     continue
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = self._hands.process(rgb)
+                mp_image = vision.Image(image_format=ImageFormat.SRGB, data=rgb)
+                hands.detect_async(mp_image, timestamp_ms)
+                timestamp_ms += 33
 
-                if results.multi_hand_landmarks:
-                    for hand in results.multi_hand_landmarks:
-                        gesture = self._classify(hand)
-                        if gesture and time.time() - self._last_gesture_time > self._gesture_cooldown:
-                            self._react(gesture)
-                            self._last_gesture_time = time.time()
+                # Process results from callback buffer
+                while self._gesture_results:
+                    result = self._gesture_results.pop(0)
+                    if result.hand_landmarks:
+                        for hand in result.hand_landmarks:
+                            gesture = self._classify(hand)
+                            if gesture and time.time() - self._last_gesture_time > self._gesture_cooldown:
+                                self._react(gesture)
+                                self._last_gesture_time = time.time()
 
-                time.sleep(0.033)  # ~30fps
+                time.sleep(0.033)
+
+            hands.close()
         except Exception as e:
             logger.error(f"[Gesture] Camera loop error: {e}")
         finally:

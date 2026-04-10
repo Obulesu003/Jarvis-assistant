@@ -2165,6 +2165,12 @@ def main():
                 cinematic.run_threaded()
                 ui.write_log("SYS: Cinematic HUD active.")
                 logging.getLogger("JARVIS").info('HUD: Cinematic JARVIS display started')
+
+                # Task 15: Start the Ambient Awareness Dashboard
+                from core.system_snapshot import SystemSnapshot
+                system_snapshot = SystemSnapshot()
+                cinematic.show_ambient_dashboard(True, system_snapshot)
+                logging.getLogger("JARVIS").info('HUD: Ambient Awareness Dashboard started')
         except Exception as e:
             logging.getLogger("JARVIS").info(f'HUD: Cinematic HUD failed to start: {e}')
 

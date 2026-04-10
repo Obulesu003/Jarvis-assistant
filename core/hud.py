@@ -11,6 +11,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 _hud = None  # Singleton
+_ambient_dashboard = None  # Ambient dashboard instance
 
 
 class JARVISHUD:
@@ -331,6 +332,42 @@ class JARVISHUD:
         """Start HUD in a background thread."""
         thread = threading.Thread(target=self.run, daemon=True, name="HUD")
         thread.start()
+
+    def show_ambient_dashboard(self, show: bool, system_snapshot=None):
+        """
+        Show or hide the ambient awareness dashboard.
+
+        Args:
+            show: True to show, False to hide
+            system_snapshot: Optional SystemSnapshot instance for data collection
+        """
+        global _ambient_dashboard
+
+        if show:
+            if _ambient_dashboard is None and system_snapshot is not None:
+                from core.ambient_dashboard import AmbientDashboard
+                _ambient_dashboard = AmbientDashboard(self, system_snapshot)
+            if _ambient_dashboard is not None:
+                _ambient_dashboard.show()
+        else:
+            if _ambient_dashboard is not None:
+                _ambient_dashboard.hide()
+
+    def toggle_ambient_dashboard(self, system_snapshot=None):
+        """Toggle the ambient dashboard visibility."""
+        global _ambient_dashboard
+
+        if _ambient_dashboard is None and system_snapshot is not None:
+            from core.ambient_dashboard import AmbientDashboard
+            _ambient_dashboard = AmbientDashboard(self, system_snapshot)
+
+        if _ambient_dashboard is not None:
+            _ambient_dashboard.toggle()
+
+    def get_ambient_dashboard(self):
+        """Get the ambient dashboard instance."""
+        global _ambient_dashboard
+        return _ambient_dashboard
 
 
 def get_hud() -> JARVISHUD | None:
