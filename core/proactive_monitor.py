@@ -115,6 +115,21 @@ class ProactiveMonitor:
         """Inject the InteractionPatternLearner from JarvisLive."""
         self._pattern_learner = learner
 
+    def set_dnd_check(self, dnd_check: callable):
+        """
+        Set a callable that returns True when JARVIS is in do-not-disturb mode.
+        When True, proactive volunteering is suppressed.
+
+        Args:
+            dnd_check: A callable that returns bool (e.g. gesture_ctrl.is_do_not_disturb)
+        """
+        self._dnd_check = dnd_check
+
+    def _is_dnd(self) -> bool:
+        """Return True if do-not-disturb mode is active."""
+        dnd = getattr(self, "_dnd_check", None)
+        return dnd() if dnd else False
+
     def _get_speak(self):
         """Get the current speak function."""
         return self._speak_ref._func
@@ -189,6 +204,10 @@ class ProactiveMonitor:
 
         if idle_seconds < self._idle_interval:
             return  # User hasn't been idle long enough
+
+        # Respect do-not-disturb mode (gesture: fist)
+        if self._is_dnd():
+            return
 
         # Check with ConversationContextEngine
         if self._ctx and self._ctx.should_volunteer():

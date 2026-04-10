@@ -3,6 +3,7 @@ gesture_control.py - JARVIS responds to hand gestures via webcam.
 MediaPipe Hands — CPU-capable, accurate at desk distance.
 Gestures: wave (wake), thumbs up (acknowledge), thumbs down (cancel), open palm (pause), fist (silence)
 """
+import collections
 import logging
 import threading
 import time
@@ -24,6 +25,7 @@ class GestureController:
     """
 
     GESTURES = {
+        "wave": "wake",
         "thumbs_up": "acknowledge",
         "thumbs_down": "cancel",
         "open_palm": "pause",
@@ -42,6 +44,9 @@ class GestureController:
         self._gesture_cooldown = 3.0  # seconds between gesture reactions
         self._ctx = None
         self._do_not_disturb = False
+        # Wave detection: track wrist X positions over time
+        self._hand_positions: collections.deque = collections.deque(maxlen=20)
+        self._wave_cooldown = 0.0
 
     def initialize(self):
         """Initialize MediaPipe HandLandmarker (Tasks API)."""
@@ -137,6 +142,9 @@ class GestureController:
                     result = self._gesture_results.pop(0)
                     if result.hand_landmarks:
                         for hand in result.hand_landmarks:
+                            # Track wrist (landmark 0) X position for wave detection
+                            wrist = hand.landmark[0]
+                            self._hand_positions.append(wrist.x)
                             gesture = self._classify(hand)
                             if gesture and time.time() - self._last_gesture_time > self._gesture_cooldown:
                                 self._react(gesture)
@@ -153,6 +161,10 @@ class GestureController:
 
     def _classify(self, landmarks) -> str | None:
         """Classify hand pose from MediaPipe landmarks."""
+        # Wave detection: check for oscillating hand movement
+        if self._detect_wave():
+            return "wave"
+
         thumb_tip = landmarks.landmark[4]
         index_tip = landmarks.landmark[8]
         index_base = landmarks.landmark[5]
@@ -191,12 +203,33 @@ class GestureController:
 
         return None
 
+    def _detect_wave(self) -> bool:
+        """Detect a waving gesture from tracked wrist positions."""
+        positions = list(self._hand_positions)
+        if len(positions) < 12:
+            return False
+
+        # Count direction changes (sign flips in velocity)
+        direction_changes = 0
+        prev_delta = 0
+        for i in range(1, len(positions)):
+            delta = positions[i] - positions[i - 1]
+            if prev_delta != 0 and delta * prev_delta < 0:
+                direction_changes += 1
+            prev_delta = delta
+
+        # Wave: at least 3 direction changes (left-right-left or right-left-right)
+        return direction_changes >= 3
+
     def _react(self, gesture: str):
         """React to a recognized gesture."""
         action = self.GESTURES.get(gesture, "")
         logger.info(f"[Gesture] Recognized: {gesture} -> {action}")
 
-        if action == "acknowledge":
+        if action == "wake":
+            if self._speak:
+                self._speak("I'm listening, sir.")
+        elif action == "acknowledge":
             if self._hud:
                 self._hud.set_state("listening")
             if self._speak:

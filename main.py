@@ -2266,6 +2266,10 @@ def main():
         jarvis = JarvisLive(ui)
         jarvis_speak_ref.set(jarvis.speak)  # Wire proactive monitor + briefing to jarvis's speak
 
+        # Task 18: Wire GestureController into ConversationContextEngine
+        _gesture.set_conversation_context(jarvis._ctx)
+        proactive.set_dnd_check(_gesture.is_do_not_disturb)
+
         # Wire emotion detection callback from audio pipeline to TTS
         try:
             pipeline = get_pipeline()
