@@ -1107,6 +1107,12 @@ class JarvisLive:
         self._turn_state = "listening"  # listening | jarvis_speaking | interrupted
         self._current_speech_text = ""  # What JARVIS is currently saying
 
+        # Task 22: Interruption guard — require sustained audio before interrupting
+        # Counts consecutive audio frames above noise floor while JARVIS is speaking.
+        # Only triggers interruption after MIN_INTERRUPTION_FRAMES sustained frames.
+        self._interruption_frames = 0
+        self._min_interruption_frames = 5  # ~160ms of sustained speech to confirm real user voice
+
         # Phase 6: MemoryBridge -- initialized lazily on shutdown
         self._memory_bridge = None
 
@@ -1227,6 +1233,8 @@ class JarvisLive:
 
         # 3. Set turn state
         self._turn_state = "interrupted"
+        # Task 22: Reset interruption guard
+        self._interruption_frames = 0
 
         logging.getLogger("JARVIS").info("[TurnModel] User interrupted JARVIS mid-sentence")
 
@@ -1263,6 +1271,8 @@ class JarvisLive:
                     self._pattern_learner.on_turn_complete(helpful=None)
 
         self._turn_state = "listening"
+        # Task 22: Reset interruption guard on turn complete
+        self._interruption_frames = 0
 
     def _load_voice_settings(self) -> dict:
         """Load voice settings from config/settings.json."""
@@ -1853,15 +1863,31 @@ class JarvisLive:
         stop_event = asyncio.Event()
 
         def callback(indata, frames, time_info, status):
+            import numpy as np
+
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
             with self._cooldown_lock:
                 on_cooldown = self._speech_cooldown
             # Don't send audio if JARVIS is speaking OR on cooldown after speaking
             if jarvis_speaking:
-                # User is speaking while JARVIS is speaking — interruption
-                self._handle_interruption(self._current_speech_text)
+                # Task 22: Require sustained audio before interruption
+                # Measure RMS energy to distinguish real speech from ambient noise/spikes
+                audio_chunk = indata[:, 0].astype(np.float32) / 32768.0
+                rms = float(np.sqrt(np.mean(audio_chunk**2)))
+                if rms > 0.01:  # Real audio above typical ambient noise
+                    self._interruption_frames += 1
+                    if self._interruption_frames >= self._min_interruption_frames:
+                        # Sustained user speech confirmed — trigger interruption
+                        self._handle_interruption(self._current_speech_text)
+                        self._interruption_frames = 0
+                else:
+                    # Below threshold — reset the counter so pops/snaps don't trigger
+                    self._interruption_frames = 0
                 return
+            else:
+                # Reset counter when JARVIS is not speaking
+                self._interruption_frames = 0
             if not on_cooldown and not self.ui.muted:
                 data = indata.tobytes()
                 # Phase 4: Audio buffer -- keep last 3 seconds in memory

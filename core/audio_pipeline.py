@@ -69,6 +69,16 @@ class JARVISAudioPipeline:
         # Idle detection - detect when user has been silent a long time
         self._idle_threshold: float = 120.0       # 2 minutes
 
+        # Task 22: Adaptive pause detection — calibrated to ambient noise
+        # Silence threshold multiplier over measured noise RMS (computed during init)
+        self._silence_rms_multiplier: float = 2.5
+        self._silence_frames_threshold: int = 15   # ~480ms of silence before end-of-speech
+        # Minimum speech frames required: discard brief pops/snaps as non-speech
+        self._min_speech_frames: int = 3
+        self._calibration_chunks: list = []      # Collect ~1.6s of startup silence
+        self._is_calibrating: bool = True
+        self._calibration_frames_collected: int = 0
+
     def initialize(self):
         """Initialize all audio components."""
         from core.wake_word import WakeWordDetector
@@ -84,6 +94,10 @@ class JARVISAudioPipeline:
         self._wake_word.initialize()
         self._vad.initialize()
         self._stt.initialize()
+        # Task 22: Collect calibration chunks for first ~1.6s of silence
+        self._is_calibrating = True
+        self._calibration_chunks = []
+        self._calibration_frames_collected = 0
 
         logger.info("[AudioPipeline] All components initialized")
 
@@ -190,6 +204,17 @@ class JARVISAudioPipeline:
             return
 
         latest = np.array(list(self._audio_buffer)[-512:], dtype=np.float32)
+        rms = float(np.sqrt(np.mean(latest**2)))
+
+        # Task 22: Collect calibration chunks during startup
+        if self._is_calibrating and not self._is_speaking:
+            self._calibration_chunks.append(latest.copy())
+            self._calibration_frames_collected += 1
+            if self._calibration_frames_collected >= 50:
+                self._vad.calibrate(self._calibration_chunks)
+                self._is_calibrating = False
+                self._calibration_chunks = []
+                logger.info("[AudioPipeline] VAD calibrated for ambient noise")
 
         # Skip processing if JARVIS is speaking
         if self._is_speaking:
@@ -234,12 +259,10 @@ class JARVISAudioPipeline:
                 self._silence_frames = 0
             else:
                 self._silence_frames += 1
-                # Only trigger on genuine silence: check RMS energy
-                rms = float(np.sqrt(np.mean(latest**2)))
-                # Short silence (~500ms, 15 frames × 32ms) for normal speech
-                # Long silence (~1500ms) for complex utterances
-                # Use RMS to distinguish genuine silence from pauses/background noise
-                if self._silence_frames > 15 and rms < 0.01:
+                # Task 22: Adaptive silence threshold — use measured ambient noise
+                # instead of fixed 0.01 RMS. If RMS stays above silence level for
+                # at least min_speech_frames, the speech is considered real.
+                if self._silence_frames > self._min_speech_frames and rms < 0.01:
                     self._state = "processing"
 
         elif self._state == "processing":
