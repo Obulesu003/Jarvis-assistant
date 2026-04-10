@@ -1173,8 +1173,7 @@ class JarvisLive:
                 tts.set_emotion(emotion_tone)
                 # Reset after a delay so emotion doesn't persist
                 def _reset():
-                    import time
-                    time.sleep(2.0)
+                    time_module.sleep(2.0)
                     tts.reset_emotion()
                 threading.Thread(target=_reset, daemon=True).start()
         except Exception:
@@ -1738,8 +1737,7 @@ class JarvisLive:
                     try:
                         if action == "type_text":
                             text = args.get("text", "")
-                            from actions.computer_control import computer_control as cc_func
-                            r = await loop.run_in_executor(None, lambda: cc_func(
+                            r = await loop.run_in_executor(None, lambda: computer_control(
                                 parameters={"action": "type", "text": text}, player=self.ui
                             ))
                             if r and "error" not in str(r).lower():
@@ -1755,7 +1753,6 @@ class JarvisLive:
                 else:
                     orchestrator = get_llm_orchestrator(ui=self.ui)
                     context = {
-                        "last_email_id": getattr(self, "_last_email_id", None),
                         "recent_steps": getattr(self, "_recent_steps", [])[-5:],
                     }
                     r = await loop.run_in_executor(None, lambda: orchestrator.execute(request, context))
