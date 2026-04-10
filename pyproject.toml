@@ -1,0 +1,147 @@
+[project]
+name = "mark-xxxv"
+version = "1.0.0"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # Pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "YTT",   # flake8-2020
+    "ASYNC", # flake8-async
+    "C4",    # flake8-comprehensions
+    "EM",    # flake8-errmsg
+    "ISC",   # flake8-implicit-str-concat
+    "PIE",   # flake8-pie
+    "T20",   # flake8-print
+    "RET",   # flake8-return
+    "SIM",   # flake8-simplify
+    "PTH",   # flake8-use-pathlib
+    "PGH",   # pygrep-hooks
+    "RUF",   # Ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "ISC001", # may cause conflicts with formatter
+    "PGH004", # no need for noqa on __init__.py
+    "T20",    # print statements for logging in main are fine
+    "RUF001", # Turkish strings contain ambiguous characters
+    "RUF002", # docstrings may contain Turkish text
+    "RUF003", # Turkish comments contain ambiguous characters
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"main.py" = [
+    "T20",   # print statements for logging in main are fine
+    "E402",  # unicode safety block at top requires imports after it
+]
+"actions/*.py" = [
+    "T20",   # action modules use print for results
+    "N806",  # UPPER_CASE vars in function scopes for caching
+    "E402",  # conditional imports in try/except blocks
+    "E701",  # multiple statements on one line (intentional patterns)
+    "E702",  # multiple statements on one line (intentional patterns)
+    "E741",  # ambiguous variable name 'i' in loop contexts
+    "I001",  # import sorting — complex conditional imports
+    "PTH100", # os.path.abspath() — intentional for cross-platform path resolution
+    "PTH103", # os.makedirs() — intentional for creating dirs
+    "PTH107", # os.remove() — intentional for cleanup
+    "PTH110", # os.path.exists() — intentional for checking paths
+    "PTH118", # os.path.join() — intentional for path joining
+    "PTH120", # os.path.dirname() — intentional for path extraction
+    "PTH123", # open() vs Path.open() — complex pathlib vars
+    "SIM112", # capitalized env vars — Windows uses lowercase names
+    "SIM113", # enumerate() suggestion — intentional counter pattern
+    "RUF012", # mutable default values in dict literals
+]
+"ui.py" = [
+    "T20",   # UI may print for debugging
+    "E402",  # conditional imports at module level
+    "E701",  # multiple statements on one line
+    "E702",  # multiple statements on one line
+    "E741",  # ambiguous variable name
+    "F401",  # imports may be unused depending on platform
+    "N806",  # UPPER_CASE vars in function scopes
+    "PTH100", # os.path.abspath() — intentional
+    "PTH103", # os.makedirs() — intentional
+    "PTH110", # os.path.exists() — intentional
+    "PTH118", # os.path.join() — intentional
+    "PTH123", # open() vs Path.open() — complex pathlib vars
+]
+"agent/*.py" = [
+    "T20",   # agent modules may print for logging
+    "N806",  # UPPER_CASE vars in function scopes
+    "E402",  # conditional imports
+    "E701",  # multiple statements on one line
+    "E702",  # multiple statements on one line
+    "I001",  # import sorting — complex conditional imports
+    "PTH100", # os.path.abspath() — intentional
+    "PTH103", # os.makedirs() — intentional
+    "PTH108", # os.unlink() — intentional for temp file cleanup
+    "PTH123", # open() vs Path.open() — complex pathlib vars
+]
+"core/*.py" = [
+    "T20",   # core modules may print for logging
+    "N806",  # UPPER_CASE vars in function scopes
+    "E402",  # conditional imports
+    "E701",  # multiple statements on one line
+    "PTH100", # os.path.abspath() — intentional
+    "PTH103", # os.makedirs() — intentional
+    "PTH110", # os.path.exists() — intentional
+    "PTH118", # os.path.join() — intentional
+    "PTH123", # open() vs Path.open() — complex pathlib vars
+    "RUF012", # mutable default values in class attrs
+]
+"integrations/**/*.py" = [
+    "T20",   # integration modules may print for logging
+    "N806",  # UPPER_CASE vars in function scopes
+    "E402",  # conditional imports
+    "E701",  # multiple statements on one line
+    "PTH100", # os.path.abspath() — intentional
+    "PTH103", # os.makedirs() — intentional
+    "PTH110", # os.path.exists() — intentional
+    "PTH111", # os.path.expanduser() — intentional
+    "PTH118", # os.path.join() — intentional
+    "PTH123", # open() vs Path.open() — complex pathlib vars
+    "PTH208", # Path.iterdir() suggestion — intentional os.listdir
+    "SIM102", # nested if simplification — intentional readability
+    "ASYNC109", # asyncio.timeout — intentional explicit timeout param
+    "ASYNC240", # async with pathlib — intentional in async context
+    "RUF006", # asyncio.ensure_future without assignment — intentional
+    "RUF012", # mutable default values in class attrs
+]
+"memory/*.py" = [
+    "T20",   # memory modules may print for logging
+    "N806",  # UPPER_CASE vars in function scopes
+    "E402",  # conditional imports
+    "E701",  # multiple statements on one line
+    "PTH100", # os.path.abspath() — intentional
+    "PTH103", # os.makedirs() — intentional
+    "PTH110", # os.path.exists() — intentional
+    "PTH118", # os.path.join() — intentional
+    "PTH123", # open() vs Path.open() — complex pathlib vars
+    "PTH208", # Path.iterdir() — intentional os.listdir
+    "F401",  # conditional unused imports
+]
+
+[tool.bandit]
+targets = ["actions", "core", "integrations", "memory", "agent"]
+exclude_dirs = ["__pycache__", ".venv", "venv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

@@ -13,7 +13,6 @@ import os
 import re
 import time
 from typing import Any
-from core.local_llm import get_local_llm
 
 logger = logging.getLogger(__name__)
 
@@ -82,16 +81,8 @@ class LLMOrchestrator:
             # Phase 3: Format response using LLM
             return self._format_response_llm(user_request, steps, results)
 
-        # Final fallback: try LocalLLM before giving up
-        logger.info("[LLMOrchestrator] All planning methods failed, trying LocalLLM")
-        local_llm = get_local_llm()
-        if local_llm.is_available():
-            response = local_llm.generate(
-                f"User request: {user_request}\nProvide a helpful response."
-            )
-            if response:
-                return response
-
+        # Final fallback: return a graceful response when nothing works
+        logger.warning("[LLMOrchestrator] All planning methods failed — returning fallback response")
         return self._fallback_response()
 
     # ------------------------------------------------------------------ #

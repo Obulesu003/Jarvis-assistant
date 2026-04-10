@@ -1,0 +1,10 @@
+{
+  "chains": {
+    "assistant": {
+      "count": 1,
+      "helpful": 0,
+      "unhelpful": 0
+    }
+  },
+  "feedback": {}
+}
