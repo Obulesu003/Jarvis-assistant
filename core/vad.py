@@ -68,11 +68,12 @@ class VoiceActivityDetector:
             try:
                 p = self._model(chunk, sampling_rate=self.sample_rate).item()
                 probs.append(p)
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"[VAD] Calibration chunk error: {exc}")
                 continue
 
         if len(probs) < 10:
-            logger.warning("[VAD] Calibration: not enough valid chunks")
+            logger.warning(f"[VAD] Calibration: only {len(probs)}/50 valid chunks — using default threshold 0.5.")
             return False
 
         mean_prob = np.mean(probs)

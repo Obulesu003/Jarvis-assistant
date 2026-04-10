@@ -58,6 +58,10 @@ class JARVISAudioPipeline:
         # Background thread
         self._thread: threading.Thread | None = None
 
+        # Audio health tracking
+        self._frames_received = 0
+        self._last_health_check = 0.0
+
         # --- Continuous Conversation Mode ---
         # After wake word, stay "engaged" for 60 seconds. Skip wake word
         # detection while engaged. User speech resets and extends the timer.
@@ -118,8 +122,9 @@ class JARVISAudioPipeline:
             import numpy as np
 
             def audio_callback(indata, frames, time_info, status):
+                self._frames_received += 1
                 if status:
-                    logger.debug(f"[AudioPipeline] Audio status: {status}")
+                    logger.warning(f"[AudioPipeline] Audio status: {status}")
                 audio = indata[:, 0].copy()
                 self._audio_buffer.extend(audio)
                 self._process_state()
@@ -133,7 +138,13 @@ class JARVISAudioPipeline:
             )
 
             with self._stream:
+                self._stream.start()
+                # Health check: warn if no audio frames received after 3 seconds
+                self._last_health_check = time.time()
                 while self._is_listening:
+                    if self._frames_received == 0 and (time.time() - self._last_health_check) > 3:
+                        logger.warning("[AudioPipeline] No audio frames received — check microphone")
+                        self._last_health_check = time.time()
                     self._check_engagement_timeout()
                     time.sleep(0.01)
         except ImportError:
@@ -207,14 +218,18 @@ class JARVISAudioPipeline:
         rms = float(np.sqrt(np.mean(latest**2)))
 
         # Task 22: Collect calibration chunks during startup
+        # Collect all chunks during calibration regardless of RMS (let VAD decide validity)
         if self._is_calibrating and not self._is_speaking:
             self._calibration_chunks.append(latest.copy())
             self._calibration_frames_collected += 1
             if self._calibration_frames_collected >= 50:
-                self._vad.calibrate(self._calibration_chunks)
+                calibrated = self._vad.calibrate(self._calibration_chunks)
                 self._is_calibrating = False
                 self._calibration_chunks = []
-                logger.info("[AudioPipeline] VAD calibrated for ambient noise")
+                if calibrated:
+                    logger.info("[AudioPipeline] VAD calibrated for ambient noise")
+                else:
+                    logger.warning("[AudioPipeline] VAD calibration failed — using default threshold 0.5")
 
         # Skip processing if JARVIS is speaking
         if self._is_speaking:
