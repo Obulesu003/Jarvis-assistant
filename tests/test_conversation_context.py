@@ -83,6 +83,7 @@ class TestConversationContextEngine:
     def test_volunteer_topic_empty_when_no_facts(self):
         """With no memory injected, volunteer_topic() returns None."""
         engine = ConversationContextEngine()
+        engine._system_health_check = MagicMock(return_value=None)
 
         result = engine.volunteer_topic()
 

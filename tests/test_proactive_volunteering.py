@@ -12,8 +12,10 @@ class TestProactiveVolunteering:
 
     @pytest.fixture
     def engine(self):
-        """Create a context engine."""
-        return ConversationContextEngine()
+        """Create a context engine with mocked system health."""
+        eng = ConversationContextEngine()
+        eng._system_health_check = MagicMock(return_value=None)
+        return eng
 
     def test_should_volunteer_idle_too_short(self, engine):
         """Should not volunteer when idle less than 5 minutes."""
