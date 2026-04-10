@@ -33,6 +33,10 @@ class JARVISHUD:
         self._screen_h = 1080
         self._current_state_color = [0, 180, 255]
         self._context_lock = threading.Lock()
+        # Thread sync: signals when DPG viewport is fully created and ready
+        self._viewport_ready = threading.Event()
+        # Breathing animation state
+        self._breath_phase = 0.0
 
     def _build_ui(self, dpg, screen_w: int, screen_h: int):
         """Build the HUD layout in DearPyGui."""
@@ -310,14 +314,25 @@ class JARVISHUD:
             return
 
         self._is_running = True
+        self._viewport_ready.clear()
         self._dpg.show_viewport()
+
+        # Signal that the viewport is now active (fixes race with show_ambient_dashboard)
+        self._viewport_ready.set()
 
         while self._dpg.is_dearpygui_running():
             self.update_time()
+            # Breathing animation: pulse the JARVIS circle alpha for a living feel
+            self._breath_phase = (self._breath_phase + 0.015) % 1.0
+            alpha = int(100 + 80 * (0.5 + 0.5 * __import__("math").sin(
+                self._breath_phase * 2 * __import__("math").pi
+            )))
+            self.set_jarcircle_opacity(alpha)
             self._dpg.render_dearpygui_frame()
             time.sleep(0.016)  # ~60fps
 
         self._is_running = False
+        self._viewport_ready.clear()
 
     def stop(self):
         """Stop the HUD render loop."""
@@ -342,8 +357,13 @@ class JARVISHUD:
             system_snapshot: Optional SystemSnapshot instance for data collection
         """
         global _ambient_dashboard
-
         if show:
+            # Wait for the DPG viewport to be ready before building the dashboard UI.
+            # This fixes the race condition where show_ambient_dashboard() was called
+            # from the main thread before run() had created the viewport.
+            if not self._viewport_ready.wait(timeout=5.0):
+                logger.warning("[HUD] Viewport not ready after 5s — skipping ambient dashboard")
+                return
             if _ambient_dashboard is None and system_snapshot is not None:
                 from core.ambient_dashboard import AmbientDashboard
                 _ambient_dashboard = AmbientDashboard(self, system_snapshot)
