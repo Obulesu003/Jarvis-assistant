@@ -347,6 +347,61 @@ class UniversalOrchestrator:
             return steps
 
         # ================================================================ #
+        # MEDIA CONTROL                                                    #
+        # ================================================================ #
+
+        # "play music" / "play jazz" / "put on some music" — smart routing
+        if any(kw in rl for kw in ["play music", "play some music", "put on music", "play a song",
+                                     "play songs", "play something", "play jazz", "play rock",
+                                     "play hip hop", "play classical", "play movies", "play a movie"]):
+            # Extract what to play
+            query = "music"
+            for kw in ["play ", "put on "]:
+                idx = rl.find(kw)
+                if idx != -1:
+                    rest = request[idx + len(kw):].strip().strip("?.,!").strip()
+                    if rest and rest not in ("some music", "music", "songs", "a song", "something"):
+                        query = rest
+                    break
+            steps.append({
+                "adapter": "system",
+                "action": "play_music",
+                "params": {"query": query},
+                "description": f"Play music: {query}",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["stop music", "stop the music", "pause music", "pause the music",
+                                    "stop playing", "stop song", "pause song", "stop playback",
+                                    "stop spotify", "pause spotify", "stop audio"]):
+            action = "stop" if "stop" in rl else "play_pause"
+            steps.append({
+                "adapter": "system",
+                "action": "control_media",
+                "params": {"action": action},
+                "description": f"{action.replace('_', ' ')} media playback",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["next song", "skip song", "next track", "skip this"]):
+            steps.append({
+                "adapter": "system",
+                "action": "control_media",
+                "params": {"action": "next"},
+                "description": "Skip to next track",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["previous song", "prev song", "go back"]):
+            steps.append({
+                "adapter": "system",
+                "action": "control_media",
+                "params": {"action": "previous"},
+                "description": "Go to previous track",
+            })
+            return steps
+
+        # ================================================================ #
         # WHATSAPP OPERATIONS                                             #
         # ================================================================ #
 
@@ -429,6 +484,18 @@ class UniversalOrchestrator:
             })
             return steps
 
+        # Active window / app awareness
+        if any(kw in rl for kw in ["what's open", "what is open", "which window",
+                                     "which app", "what app is", "active window",
+                                     "what am i doing", "what am i looking"]):
+            steps.append({
+                "adapter": "system",
+                "action": "get_active_window",
+                "params": {},
+                "description": "Get active window",
+            })
+            return steps
+
         if any(kw in rl for kw in ["system info", "cpu", "memory", "disk"]):
             steps.append({
                 "adapter": "system",
@@ -489,6 +556,260 @@ class UniversalOrchestrator:
                 "action": "search_contacts",
                 "params": {"query": query},
                 "description": f"Find contact: {query}",
+            })
+            return steps
+
+        # ================================================================ #
+        # CLIPBOARD OPERATIONS                                              #
+        # ================================================================ #
+
+        if any(kw in rl for kw in ["copy", "clipboard", "paste", "read clipboard", "what's in my clipboard"]):
+            if "set" in rl or "write" in rl or "copy" in rl:
+                text = self._extract_clipboard_text(request)
+                if text:
+                    steps.append({
+                        "adapter": "windows_app",
+                        "action": "write_clipboard",
+                        "params": {"text": text},
+                        "description": f"Copy to clipboard: {text[:50]}",
+                    })
+                    return steps
+            steps.append({
+                "adapter": "windows_app",
+                "action": "read_clipboard",
+                "params": {},
+                "description": "Read clipboard contents",
+            })
+            return steps
+
+        # ================================================================ #
+        # HOMEASSISTANT / SMART HOME                                      #
+        # ================================================================ #
+
+        if any(kw in rl for kw in ["turn on", "turn off", "switch on", "switch off"]):
+            if any(kw in rl for kw in ["light", "lamp", "led", "bulb", "strip"]):
+                entity = self._extract_ha_entity(request, "light")
+                action = "turn_on" if any(kw in rl for kw in ["turn on", "switch on"]) else "turn_off"
+                steps.append({
+                    "adapter": "homeassistant",
+                    "action": action,
+                    "params": {"entity_id": entity},
+                    "description": f"{action.replace('_', ' ')} light",
+                })
+                return steps
+            if any(kw in rl for kw in ["switch", "outlet", "plug", "fan"]):
+                entity = self._extract_ha_entity(request, "switch")
+                action = "turn_on" if any(kw in rl for kw in ["turn on", "switch on"]) else "turn_off"
+                steps.append({
+                    "adapter": "homeassistant",
+                    "action": action,
+                    "params": {"entity_id": entity},
+                    "description": f"{action.replace('_', ' ')} switch",
+                })
+                return steps
+
+        if any(kw in rl for kw in ["brightness", "dim", "set light", "light brightness"]):
+            brightness = self._extract_brightness(request)
+            if brightness:
+                entity = self._extract_ha_entity(request, "light")
+                steps.append({
+                    "adapter": "homeassistant",
+                    "action": "set_brightness",
+                    "params": {"entity_id": entity, "brightness": brightness},
+                    "description": f"Set brightness to {brightness}%",
+                })
+                return steps
+
+        if any(kw in rl for kw in ["temperature", "thermostat", "set to ", "ac temperature", "heat"]):
+            temp = self._extract_temperature(request)
+            if temp:
+                entity = self._extract_ha_entity(request, "climate")
+                steps.append({
+                    "adapter": "homeassistant",
+                    "action": "set_temperature",
+                    "params": {"entity_id": entity, "temperature": temp},
+                    "description": f"Set temperature to {temp} deg",
+                })
+                return steps
+
+        if any(kw in rl for kw in ["list lights", "what lights", "show lights", "home assistant"]):
+            steps.append({
+                "adapter": "homeassistant",
+                "action": "list_lights",
+                "params": {},
+                "description": "List all lights",
+            })
+            return steps
+
+        # ================================================================ #
+        # SPOTIFY / MEDIA DEEP CONTROL                                     #
+        # ================================================================ #
+
+        if any(kw in rl for kw in ["playlist", "play playlist", "my playlist", "open playlist"]):
+            playlist = self._extract_playlist_name(request)
+            if playlist:
+                steps.append({
+                    "adapter": "system",
+                    "action": "play_playlist",
+                    "params": {"playlist_name": playlist},
+                    "description": f"Play playlist: {playlist}",
+                })
+                return steps
+
+        if any(kw in rl for kw in ["volume", "louder", "quieter", "mute", "unmute", "sound up", "sound down"]):
+            if "mute" in rl or "unmute" in rl:
+                steps.append({
+                    "adapter": "system",
+                    "action": "control_volume",
+                    "params": {"action": "mute"},
+                    "description": "Mute/unmute",
+                })
+            elif "up" in rl or "louder" in rl or "increase" in rl:
+                steps.append({
+                    "adapter": "system",
+                    "action": "control_volume",
+                    "params": {"action": "up"},
+                    "description": "Volume up",
+                })
+            elif "down" in rl or "quieter" in rl or "decrease" in rl:
+                steps.append({
+                    "adapter": "system",
+                    "action": "control_volume",
+                    "params": {"action": "down"},
+                    "description": "Volume down",
+                })
+            else:
+                steps.append({
+                    "adapter": "system",
+                    "action": "control_volume",
+                    "params": {"action": "up"},
+                    "description": "Volume up",
+                })
+            return steps
+
+        if any(kw in rl for kw in ["now playing", "current song", "what song", "what's playing", "current track"]):
+            steps.append({
+                "adapter": "system",
+                "action": "get_current_track",
+                "params": {},
+                "description": "Get current track",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["skip to", "play this song", "play that song", "find this"]):
+            song = self._extract_song_name(request)
+            if song:
+                steps.append({
+                    "adapter": "system",
+                    "action": "skip_to_song",
+                    "params": {"song_name": song},
+                    "description": f"Skip to: {song}",
+                })
+                return steps
+
+        # ================================================================ #
+        # WHATSAPP DEEP AUTOMATION                                         #
+        # ================================================================ #
+
+        if "whatsapp" in rl or "whats app" in rl:
+            if "read message" in rl or "read chat" in rl or "check messages" in rl:
+                contact = self._extract_whatsapp_contact(request)
+                count = self._extract_message_count(request)
+                steps.append({
+                    "adapter": "whatsapp",
+                    "action": "read_messages",
+                    "params": {"contact": contact, "count": count},
+                    "description": f"Read WhatsApp messages from {contact}",
+                })
+                return steps
+
+            if "search message" in rl or "find message" in rl:
+                query = self._extract_after_prefix(rl, ["search message ", "find message ", "whatsapp search "])
+                steps.append({
+                    "adapter": "whatsapp",
+                    "action": "search_messages",
+                    "params": {"query": query},
+                    "description": f"Search WhatsApp for: {query}",
+                })
+                return steps
+
+            if "send photo" in rl or "send image" in rl or "send media" in rl or "send file" in rl:
+                params = self._extract_whatsapp_media_params(request)
+                if params.get("contact") and params.get("file_path"):
+                    steps.append({
+                        "adapter": "whatsapp",
+                        "action": "send_media",
+                        "params": params,
+                        "description": f"Send media to {params.get('contact')}",
+                    })
+                    return steps
+
+        # ================================================================ #
+        # TEAMS DEEP AUTOMATION                                             #
+        # ================================================================ #
+
+        if "teams" in rl:
+            if any(kw in rl for kw in ["join meeting", "join teams meeting", "start meeting", "teams meeting"]):
+                meeting = self._extract_meeting_name(request)
+                steps.append({
+                    "adapter": "windows_app",
+                    "action": "join_teams_meeting",
+                    "params": {"meeting_name": meeting},
+                    "description": f"Join Teams meeting: {meeting}",
+                })
+                return steps
+
+            if any(kw in rl for kw in ["teams meeting", "teams calendar", "today's meetings", "upcoming meetings", "what meetings"]):
+                steps.append({
+                    "adapter": "windows_app",
+                    "action": "get_teams_meetings",
+                    "params": {},
+                    "description": "Get today's Teams meetings",
+                })
+                return steps
+
+            if "read" in rl and any(kw in rl for kw in ["teams channel", "channel message", "teams chat"]):
+                channel = self._extract_teams_channel(request)
+                count = self._extract_message_count(request)
+                steps.append({
+                    "adapter": "windows_app",
+                    "action": "read_teams_messages",
+                    "params": {"channel": channel, "count": count},
+                    "description": f"Read Teams channel: {channel}",
+                })
+                return steps
+
+        # ================================================================ #
+        # OUTLOOK CALENDAR UPDATE/DELETE                                    #
+        # ================================================================ #
+
+        if any(kw in rl for kw in ["update event", "edit event", "change event", "modify event", "reschedule"]):
+            params = self._extract_outlook_event_params(request)
+            steps.append({
+                "adapter": "outlook_native",
+                "action": "update_event",
+                "params": params,
+                "description": "Update calendar event",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["delete event", "remove event", "cancel event", "remove meeting"]):
+            params = self._extract_outlook_event_params(request)
+            steps.append({
+                "adapter": "outlook_native",
+                "action": "delete_event",
+                "params": params,
+                "description": "Delete calendar event",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["find time", "meeting time", "available time", "when am i free", "free time"]):
+            params = self._extract_meeting_time_params(request)
+            steps.append({
+                "adapter": "outlook_native",
+                "action": "find_meeting_time",
+                "params": params,
+                "description": "Find available meeting time",
             })
             return steps
 
@@ -933,6 +1254,144 @@ class UniversalOrchestrator:
         else:
             params["schedule"] = "daily"
 
+        return params
+
+    # ------------------------------------------------------------------ #
+    # Deep automation extractors                                         #
+    # ------------------------------------------------------------------ #
+
+    def _extract_clipboard_text(self, request: str) -> str:
+        """Extract text to copy to clipboard."""
+        for prefix in ["copy ", "set clipboard ", "clipboard ", "remember "]:
+            if prefix in request.lower():
+                text = request.lower().split(prefix)[1].strip().rstrip("?.,")
+                return text
+        return ""
+
+    def _extract_ha_entity(self, request: str, domain: str) -> str:
+        """Extract Home Assistant entity name from request."""
+        rooms = ["living room", "bedroom", "kitchen", "bathroom", "office", "hallway", "balcony", "dining"]
+        request_lower = request.lower()
+        for room in rooms:
+            if room in request_lower:
+                return f"{domain}.{room.replace(' ', '_')}"
+        if "desk" in request_lower:
+            return f"{domain}.desk"
+        if "ceiling" in request_lower:
+            return f"{domain}.ceiling"
+        return f"{domain}.default"
+
+    def _extract_brightness(self, request: str) -> int | None:
+        """Extract brightness percentage from request."""
+        import re
+        match = re.search(r"(\d+)\s*(%|percent)", request.lower())
+        if match:
+            return int(match.group(1))
+        if "full" in request.lower() or "max" in request.lower():
+            return 100
+        if "half" in request.lower():
+            return 50
+        if "dim" in request.lower():
+            return 20
+        return None
+
+    def _extract_temperature(self, request: str) -> float | None:
+        """Extract temperature value from request."""
+        import re
+        match = re.search(r"(\d+)\s*(?:degrees|deg)", request.lower())
+        if match:
+            return float(match.group(1))
+        match2 = re.search(r"set.*?to\s+(\d+)", request.lower())
+        if match2:
+            return float(match2.group(1))
+        return None
+
+    def _extract_playlist_name(self, request: str) -> str:
+        """Extract playlist name from request."""
+        for prefix in ["playlist ", "play playlist ", "my playlist ", "open playlist "]:
+            if prefix in request.lower():
+                return request.lower().split(prefix)[1].strip().rstrip("?.,!")
+        return ""
+
+    def _extract_song_name(self, request: str) -> str:
+        """Extract song name from request."""
+        for prefix in ["skip to ", "play this song ", "play that song ", "find "]:
+            if prefix in request.lower():
+                return request.lower().split(prefix)[1].strip().rstrip("?.,!")
+        return ""
+
+    def _extract_whatsapp_contact(self, request: str) -> str:
+        """Extract WhatsApp contact name from request."""
+        match = re.search(r"(?:from|to|with)\s+(\w+)", request)
+        if match:
+            return match.group(1)
+        return ""
+
+    def _extract_message_count(self, request: str) -> int:
+        """Extract message count from request."""
+        import re
+        match = re.search(r"(\d+)\s+(?:messages|message|chat)", request.lower())
+        if match:
+            return int(match.group(1))
+        return 10  # Default
+
+    def _extract_whatsapp_media_params(self, request: str) -> dict:
+        """Extract WhatsApp media send params."""
+        params: dict = {}
+        match = re.search(r"to\s+(\w+)", request)
+        if match:
+            params["contact"] = match.group(1)
+        file_match = re.search(r'"([^"]+\.(?:jpg|png|mp4|pdf|doc))"', request)
+        if file_match:
+            params["file_path"] = file_match.group(1)
+        for prefix in ["caption ", "with text ", "message "]:
+            if prefix in request.lower():
+                params["caption"] = request.lower().split(prefix)[1].strip().rstrip("?.,!")
+                break
+        return params
+
+    def _extract_meeting_name(self, request: str) -> str:
+        """Extract meeting name from request."""
+        for prefix in ["join meeting ", "join ", "meeting ", "start meeting "]:
+            if prefix in request.lower():
+                return request.lower().split(prefix)[1].strip().rstrip("?.,!")
+        return ""
+
+    def _extract_teams_channel(self, request: str) -> str:
+        """Extract Teams channel name from request."""
+        match = re.search(r"channel\s+(\w+)", request.lower())
+        if match:
+            return match.group(1)
+        return "General"
+
+    def _extract_outlook_event_params(self, request: str) -> dict:
+        """Extract event ID and updates for update/delete."""
+        params: dict = {}
+        import re
+        id_match = re.search(r"event[_\s]?id[:\s]+([a-zA-Z0-9]+)", request)
+        if id_match:
+            params["event_id"] = id_match.group(1)
+        if any(kw in request.lower() for kw in ["update", "edit", "change", "modify"]):
+            updates: dict = {}
+            if "title" in request.lower() or "subject" in request.lower():
+                for prefix in ["title ", "subject "]:
+                    if prefix in request.lower():
+                        updates["title"] = request.lower().split(prefix)[1].strip().rstrip("?.,!")
+                        break
+            params["updates"] = updates
+        return params
+
+    def _extract_meeting_time_params(self, request: str) -> dict:
+        """Extract params for find_meeting_time."""
+        params: dict = {"duration": 60}
+        import re
+        dur_match = re.search(r"(\d+)\s*(?:minutes|min|hour)", request.lower())
+        if dur_match:
+            params["duration"] = int(dur_match.group(1))
+        att_match = re.search(r"with\s+([A-Za-z\s,]+?)(?:\s+for|\s+at|\?|$)", request)
+        if att_match:
+            names = att_match.group(1).strip()
+            params["attendees"] = [n.strip() for n in names.split(",") if n.strip()]
         return params
 
     def _today_str(self) -> str:
