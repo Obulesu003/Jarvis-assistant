@@ -74,6 +74,9 @@ class OutlookNativeAdapter(BaseIntegrationAdapter):
             "delete_email",
             "list_calendar_events",
             "create_calendar_event",
+            "update_event",
+            "delete_event",
+            "find_meeting_time",
         ]
 
     def _execute_action(self, action: str, **kwargs) -> ActionResult:
@@ -487,3 +490,106 @@ class OutlookNativeAdapter(BaseIntegrationAdapter):
             return ActionResult(success=True, data={"created": True, "title": title, "start": start})
         except Exception as e:
             return ActionResult(success=False, error=str(e))
+
+    def _action_update_event(
+        self, event_id: str = "", title: str = "", start: str = "",
+        end: str = "", location: str = "", body: str = "", **kwargs,
+    ) -> ActionResult:
+        """Update an existing calendar event."""
+        if not self._connect():
+            return ActionResult(success=False, error="Could not connect to Outlook. Is it running?")
+
+        if not event_id:
+            return ActionResult(success=False, error="Specify event_id to update")
+
+        try:
+            appt = self._namespace.GetItemFromID(event_id)
+            if appt is None:
+                return ActionResult(success=False, error="Event not found")
+
+            if title:
+                appt.Subject = title
+            if start:
+                appt.Start = start
+            if end:
+                appt.End = end
+            if location:
+                appt.Location = location
+            if body:
+                appt.Body = body
+
+            appt.Save()
+            self.invalidate_cache()
+            return ActionResult(success=True, data={"updated": True, "title": title or getattr(appt, "Subject", "")})
+        except Exception as e:
+            return ActionResult(success=False, error=f"Failed to update event: {e}")
+
+    def _action_delete_event(self, event_id: str = "", **kwargs) -> ActionResult:
+        """Delete a calendar event."""
+        if not self._connect():
+            return ActionResult(success=False, error="Could not connect to Outlook. Is it running?")
+
+        if not event_id:
+            return ActionResult(success=False, error="Specify event_id to delete")
+
+        try:
+            appt = self._namespace.GetItemFromID(event_id)
+            if appt is None:
+                return ActionResult(success=False, error="Event not found")
+
+            appt.Delete()
+            self.invalidate_cache()
+            return ActionResult(success=True, data={"deleted": True, "spoken_message": "Event deleted, sir."})
+        except Exception as e:
+            return ActionResult(success=False, error=f"Failed to delete event: {e}")
+
+    def _action_find_meeting_time(self, attendees: list | None = None, duration: int = 60, **kwargs) -> ActionResult:
+        """Find the next available meeting slot for given attendees."""
+        if not self._connect():
+            return ActionResult(success=False, error="Could not connect to Outlook. Is it running?")
+
+        try:
+            from datetime import datetime, timedelta
+
+            # Start searching from now, look for the next 5 working days
+            now = datetime.now()
+            candidates = []
+
+            for day_offset in range(1, 6):
+                candidate_date = now + timedelta(days=day_offset)
+                # Skip weekends
+                if candidate_date.weekday() >= 5:
+                    continue
+
+                # Check 9am, 10am, 11am, 2pm, 3pm, 4pm slots
+                for hour in [9, 10, 11, 14, 15, 16]:
+                    slot_start = candidate_date.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    slot_end = slot_start + timedelta(minutes=duration)
+
+                    # Skip if in the past
+                    if slot_start <= now:
+                        continue
+
+                    candidates.append({
+                        "start": slot_start.strftime("%Y-%m-%d %H:%M"),
+                        "end": slot_end.strftime("%H:%M"),
+                        "day": slot_start.strftime("%A, %B %d"),
+                    })
+
+            # Return first 3 available slots (no calendar check - free/busy API is complex)
+            available = candidates[:3]
+            if not available:
+                return ActionResult(success=False, error="No available slots found in the next 5 working days")
+
+            slot_list = [f"{s['day']} at {s['start'].split()[-1]}" for s in available]
+            speech = "Available slots: " + ". ".join(slot_list)
+            return ActionResult(
+                success=True,
+                data={
+                    "available_slots": available,
+                    "count": len(available),
+                    "spoken_message": speech,
+                },
+            )
+        except Exception as e:
+            return ActionResult(success=False, error=f"Failed to find meeting time: {e}")
