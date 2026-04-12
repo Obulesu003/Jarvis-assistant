@@ -25,8 +25,8 @@ class STTEngine:
         self._model = None
         self._model_name = None
 
-    def initialize(self):
-        """Load Faster-Whisper model."""
+    def initialize(self) -> bool:
+        """Load Faster-Whisper model. Returns True if successful."""
         try:
             from faster_whisper import WhisperModel
             self._model = WhisperModel(
@@ -36,9 +36,12 @@ class STTEngine:
             )
             self._model_name = "medium" if self.model_size == "medium" else self.model_size
             logger.info(f"[STT] Loaded model: {self.model_size}")
+            return True
         except ImportError:
-            logger.warning("[STT] faster-whisper not installed. Install with: pip install faster-whisper")
+            logger.error("[STT] faster-whisper not installed. Install with: pip install faster-whisper")
+            logger.error("[STT] Voice commands will use Gemini Live API instead.")
             self._model = None
+            return False
 
     def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe a numpy audio array (16kHz mono float32)."""

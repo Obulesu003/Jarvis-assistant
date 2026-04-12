@@ -67,7 +67,7 @@ class TTSEngine:
         return self._emotion
 
     def _check_installation(self) -> bool:
-        """Check if Piper CLI is available."""
+        """Check if Piper CLI is available. Cached after first check."""
         if self._is_installed is not None:
             return self._is_installed
         try:
@@ -76,9 +76,22 @@ class TTSEngine:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             self._is_installed = False
         if not self._is_installed:
-            logger.warning("[TTS] Piper not installed. Download from: https://github.com/rhasspy/piper/releases")
-            logger.warning("[TTS] Or install via: pip install piper-tts")
+            logger.error("[TTS] Piper not installed. Download from: https://github.com/rhasspy/piper/releases")
+            logger.error("[TTS] Or install via: pip install piper-tts")
+            logger.info("[TTS] JARVIS will use Gemini Live for voice output instead.")
         return self._is_installed
+
+    def initialize(self) -> bool:
+        """Validate TTS is ready. Call on startup to check installation."""
+        if not self._check_installation():
+            return False
+        if not Path(self.voice_path).exists():
+            logger.error(f"[TTS] Voice file not found: {self.voice_path}")
+            logger.info("[TTS] Download with:")
+            logger.info("  wget https://github.com/rhasspy/piper/releases/download/2024.11.0/en_GB-alan-medium.onnx -P models/voices/")
+            return False
+        logger.info(f"[TTS] Ready with voice: {self.voice_path}")
+        return True
 
     def speak(self, text: str, blocking: bool = True) -> np.ndarray | None:
         """Convert text to speech. Returns audio as numpy float32 array."""

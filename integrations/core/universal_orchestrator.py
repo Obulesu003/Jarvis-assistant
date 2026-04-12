@@ -13,11 +13,25 @@ No action is too complex or off-menu — it figures out what to do.
 import logging
 import re
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 
 from ..base.adapter import BaseIntegrationAdapter
 
 logger = logging.getLogger(__name__)
+
+
+def fuzzy_match(query: str, choices: list[str], threshold: float = 0.6) -> str | None:
+    """Find best fuzzy match for query in choices. Returns matched string or None."""
+    query_lower = query.lower()
+    best_score = 0
+    best_match = None
+    for choice in choices:
+        score = SequenceMatcher(None, query_lower, choice.lower()).ratio()
+        if score > best_score and score >= threshold:
+            best_score = score
+            best_match = choice
+    return best_match
 
 # Maps orchestrator adapter names to their constructor functions.
 # Adapters are instantiated lazily and cached as singletons per orchestrator instance.
@@ -139,6 +153,10 @@ class UniversalOrchestrator:
         steps = self._plan_steps(user_request, user_lower, context)
 
         if not steps:
+            # Try fuzzy matching before giving up
+            fuzzy_result = self._try_fuzzy_match(user_request, user_lower)
+            if fuzzy_result:
+                return fuzzy_result
             return self._fallback_response(user_request)
 
         # Phase 2: Execute steps
@@ -1019,6 +1037,57 @@ class UniversalOrchestrator:
         s = str(r) if r is not None else ""
         if s and s not in ("None", "Done."):
             return s
+
+        return None
+
+    def _try_fuzzy_match(self, request: str, request_lower: str) -> str | None:
+        """Try fuzzy matching to handle misheard or varied commands."""
+        # Command aliases / common variations
+        COMMAND_ALIASES = {
+            "check email": ["check emails", "check my email", "check mailbox", "read emails"],
+            "play music": ["put on music", "play some music", "play a song", "play songs", "turn on music"],
+            "weather": ["how's the weather", "what's the weather", "weather forecast", "is it raining"],
+            "calendar": ["what's on my calendar", "do i have meetings", "any meetings today"],
+            "open spotify": ["launch spotify", "start spotify", "open spotify app"],
+            "send message": ["send a message", "message someone", "whatsapp"],
+            "search": ["look up", "find", "google", "search for"],
+        }
+
+        # Check aliases
+        for canonical, aliases in COMMAND_ALIASES.items():
+            for alias in aliases:
+                if alias in request_lower or request_lower in alias:
+                    logger.info(f"[Orchestrator] Fuzzy matched '{request}' to '{canonical}'")
+                    steps = self._plan_steps(request, canonical, {})
+                    if steps:
+                        results = []
+                        for i, step in enumerate(steps):
+                            try:
+                                result = self._execute_step(step)
+                                results.append(StepResult(step_num=i+1, success=True, result=result))
+                            except Exception as e:
+                                results.append(StepResult(step_num=i+1, success=False, error=str(e)))
+                        return self._format_response(request, steps, results)
+
+        # Try fuzzy keyword matching against known action keywords
+        keywords = [
+            "play music", "open spotify", "check email", "send message", "whatsapp",
+            "weather", "calendar", "unread email", "send email", "open app",
+            "system info", "battery", "cpu", "memory", "disk",
+        ]
+        match = fuzzy_match(request_lower, keywords, threshold=0.5)
+        if match:
+            logger.info(f"[Orchestrator] Fuzzy keyword matched '{request}' to '{match}'")
+            steps = self._plan_steps(request, match, {})
+            if steps:
+                results = []
+                for i, step in enumerate(steps):
+                    try:
+                        result = self._execute_step(step)
+                        results.append(StepResult(step_num=i+1, success=True, result=result))
+                    except Exception as e:
+                        results.append(StepResult(step_num=i+1, success=False, error=str(e)))
+                return self._format_response(request, steps, results)
 
         return None
 

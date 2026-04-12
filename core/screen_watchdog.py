@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 _watchdog_instance = None
 
 
-def get_screen_watchdog():
+def get_screen_watchdog(gemini_client=None):
     global _watchdog_instance
     if _watchdog_instance is None:
-        _watchdog_instance = ScreenWatchdog()
+        _watchdog_instance = ScreenWatchdog(gemini_client=gemini_client)
     return _watchdog_instance
 
 
@@ -38,7 +38,7 @@ class ScreenWatchdog:
     - Any text that looks important but was not there last time
     """
 
-    INTERVAL = 120  # 2 minutes between captures (was 30s — too frequent)
+    INTERVAL = 30  # 30 seconds between captures (reduced from 120s for more responsive awareness)
     MAX_HISTORY = 10  # keep last N descriptions for comparison
 
     def __init__(self, gemini_client=None):

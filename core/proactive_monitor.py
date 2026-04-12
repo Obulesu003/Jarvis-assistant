@@ -264,12 +264,13 @@ class ProactiveMonitor:
         self._idle_pings = 0
 
     def _check_emails(self) -> dict:
-        """Check for new unread emails."""
+        """Check for new unread emails. Uses native Outlook first, browser fallback second."""
         try:
-            from integrations.outlook.outlook_adapter import OutlookAdapter
-            adapter = OutlookAdapter()
+            # Try native Outlook (COM) first — no browser, faster
+            from integrations.outlook.outlook_native_adapter import OutlookNativeAdapter
+            adapter = OutlookNativeAdapter()
             result = adapter.execute_action("list_emails", folder="Inbox", max_results=5, unread_only=True)
-            if result and hasattr(result, "data"):
+            if result and hasattr(result, 'data'):
                 emails = result.data.get("emails", [])
                 top = emails[0] if emails else None
                 return {
@@ -278,18 +279,34 @@ class ProactiveMonitor:
                     "top_subject": top.get("subject", "") if top else "",
                 }
         except Exception as e:
-            logger.debug(f"[ProactiveMonitor] Email check failed: {e}")
+            logger.debug(f"[ProactiveMonitor] Native email check failed: {e}")
+            # Fallback: try browser-based adapter (may open Outlook web)
+            try:
+                from integrations.outlook.outlook_adapter import OutlookAdapter
+                adapter = OutlookAdapter()
+                result = adapter.execute_action("list_emails", folder="Inbox", max_results=5, unread_only=True)
+                if result and hasattr(result, "data"):
+                    emails = result.data.get("emails", [])
+                    top = emails[0] if emails else None
+                    return {
+                        "unread": len(emails),
+                        "top_sender": top.get("sender", "someone") if top else None,
+                        "top_subject": top.get("subject", "") if top else "",
+                    }
+            except Exception:
+                pass
         return {"unread": 0}
 
     def _check_calendar(self) -> dict:
-        """Check for upcoming calendar events."""
+        """Check for upcoming calendar events. Uses native Outlook first."""
         try:
-            from integrations.outlook.outlook_adapter import OutlookAdapter
+            # Try native Outlook (COM) first — no browser, faster
+            from integrations.outlook.outlook_native_adapter import OutlookNativeAdapter
             from datetime import datetime
-            adapter = OutlookAdapter()
+            adapter = OutlookNativeAdapter()
             today = datetime.now().strftime("%Y-%m-%d")
-            result = adapter.execute_action("list_events", date=today, max_results=10)
-            if result and hasattr(result, "data"):
+            result = adapter.execute_action("list_calendar_events", start_date=today, end_date=today, max_results=10)
+            if result and hasattr(result, 'data'):
                 events = result.data.get("events", [])
                 next_event = None
                 now = datetime.now()
@@ -305,7 +322,31 @@ class ProactiveMonitor:
                             pass
                 return {"next_event": next_event, "all_events": events}
         except Exception as e:
-            logger.debug(f"[ProactiveMonitor] Calendar check failed: {e}")
+            logger.debug(f"[ProactiveMonitor] Native calendar check failed: {e}")
+            # Fallback: try browser-based adapter
+            try:
+                from integrations.outlook.outlook_adapter import OutlookAdapter
+                from datetime import datetime
+                adapter = OutlookAdapter()
+                today = datetime.now().strftime("%Y-%m-%d")
+                result = adapter.execute_action("list_events", date=today, max_results=10)
+                if result and hasattr(result, "data"):
+                    events = result.data.get("events", [])
+                    next_event = None
+                    now = datetime.now()
+                    for ev in events:
+                        start = ev.get("start")
+                        if start:
+                            try:
+                                dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                                if dt > now:
+                                    next_event = ev
+                                    break
+                            except Exception:
+                                pass
+                    return {"next_event": next_event, "all_events": events}
+            except Exception:
+                pass
         return {"next_event": None}
 
     def _check_system(self) -> dict:

@@ -192,6 +192,31 @@ def _get_local_tts():
     return _local_tts_instance
 
 
+def _log_voice_status() -> None:
+    """Log voice system status at startup. Helps diagnose voice issues."""
+    import logging
+    logger = logging.getLogger("VOICE")
+
+    # Check TTS status
+    tts = _get_local_tts()
+    if tts:
+        logger.info("TTS: Ready (Piper or SAPI)")
+    else:
+        logger.warning("TTS: Not available — using Gemini Live for voice output")
+
+    # Check STT status
+    try:
+        from core.stt_engine import STTEngine
+        stt = STTEngine("small")
+        if stt.initialize():
+            logger.info("STT: Ready (Faster-Whisper)")
+        else:
+            logger.warning("STT: Not available — using Gemini Live for voice input")
+    except Exception as e:
+        logger.warning(f"STT: Error checking status: {e}")
+
+    logger.info("VOICE: Primary system is Gemini Live API")
+
 
 def get_orchestrator(ui=None):
     global _orchestrator
@@ -2182,6 +2207,10 @@ class JarvisLive:
 def main():
     # Check startup arguments
     start_minimized = "--start-minimized" in sys.argv or "-m" in sys.argv
+    quick_start = "--quick-start" in sys.argv or "-q" in sys.argv
+
+    if quick_start:
+        logging.getLogger("SYS").info("[STARTUP] Quick start mode — skipping all proactive checks")
 
     # Pre-generate and cache intro music files in background (no delay on first play)
     preload_music()
@@ -2322,9 +2351,13 @@ def main():
         logging.getLogger("JARVIS").info("AUDIO Pipeline disabled (conflicts with Gemini Live)")
 
         # Start the Screen Watchdog (JARVIS's proactive eyes)
-        watchdog = get_screen_watchdog()
-        watchdog.set_speak(jarvis_speak_ref)
+        # Pass Gemini client so watchdog can analyze screens
+        watchdog = get_screen_watchdog(gemini_client=_get_genai())
+        watchdog.set_speak(jarvis.speak)
         watchdog.start()
+
+        # Log voice system status at startup
+        _log_voice_status()
 
         # Also register screen watchdog with proactive monitor
         try:
@@ -2377,8 +2410,8 @@ def main():
                 pass
         proactive._on_alert = _hud_alert
 
-        # Run initial briefing on startup
-        if not start_minimized:
+        # Run initial briefing on startup (skip with --quick-start)
+        if not start_minimized and not quick_start:
             briefing.set_speak(jarvis.speak)
             ui.write_log("SYS: Running welcome briefing...")
             threading.Thread(

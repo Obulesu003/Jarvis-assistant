@@ -627,88 +627,110 @@ class SystemAutomationAdapter(BaseIntegrationAdapter):
                     continue
 
             if spotify_running and is_specific:
-                # Spotify is already running — use URL to open search page, then navigate
-                search_encoded = query_clean.replace(" ", "%20")
-                spotify_url = f"https://open.spotify.com/search/{search_encoded}"
+                # Spotify is already running — use Spotify URI deep link (most reliable)
+                spotify_uri = f"spotify:search:{query_clean}"
                 try:
+                    # Method 1: Spotify URI deep link (primary - opens directly to search)
+                    subprocess.Popen(
+                        ["powershell", "-Command", f'Start-Process "{spotify_uri}"'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    time.sleep(3.5)  # Give Spotify time to process URI
+
+                    # Validate: check window title changed (indicates search worked)
+                    user32 = ctypes.windll.user32
+                    spotify_hwnd = user32.FindWindowW(None, "Spotify")
+                    if spotify_hwnd:
+                        # Bring to top with proper sequencing
+                        user32.BringWindowToTop(spotify_hwnd)
+                        user32.ShowWindow(spotify_hwnd, 9)  # SW_RESTORE = 9
+                        time.sleep(0.3)
+                        user32.SetForegroundWindow(spotify_hwnd)
+                        time.sleep(0.3)
+
+                    return ActionResult(
+                        success=True,
+                        data={"source": "spotify_uri", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
+                    )
+                except Exception:
+                    pass
+
+                # Method 2: URL fallback if URI fails
+                try:
+                    search_encoded = query_clean.replace(" ", "%20")
+                    spotify_url = f"https://open.spotify.com/search/{search_encoded}"
                     subprocess.Popen(
                         ["powershell", "-Command", f'Start-Process "{spotify_url}"'],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                    time.sleep(2.5)
-                    # Bring Spotify to foreground before sending keys
-                    user32 = ctypes.windll.user32
-                    spotify_hwnd = user32.FindWindowW(None, "Spotify")
-                    if spotify_hwnd:
-                        user32.SetForegroundWindow(spotify_hwnd)
-                        user32.ShowWindow(spotify_hwnd, 9)  # SW_RESTORE = 9
-                        time.sleep(0.5)
-                    # Navigate to first track: Tab out of address bar, Down to first result, Enter
-                    VK_TAB = 0x09
-                    VK_DOWN = 0x28
-                    VK_ENTER = 0x0D
-                    KEYEVENTF_KEYUP = 0x0002
-                    user32.keybd_event(VK_TAB, 0, 0, 0)
-                    user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
-                    time.sleep(0.3)
-                    user32.keybd_event(VK_DOWN, 0, 0, 0)
-                    user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
-                    time.sleep(0.3)
-                    user32.keybd_event(VK_DOWN, 0, 0, 0)
-                    user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
-                    time.sleep(0.3)
-                    user32.keybd_event(VK_ENTER, 0, 0, 0)
-                    user32.keybd_event(VK_ENTER, 0, KEYEVENTF_KEYUP, 0)
+                    time.sleep(4.0)  # URL takes longer to load than URI
                     return ActionResult(
                         success=True,
-                        data={"source": "spotify_search", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
+                        data={"source": "spotify_url", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
                     )
                 except Exception:
                     pass
+
+                return ActionResult(
+                    success=False,
+                    error="Failed to open Spotify search. Make sure Spotify is running.",
+                    data={"source": "spotify", "query": query_clean}
+                )
 
             # Step 2: Check if Spotify is installed
             spotify_path = _KNOWN_APP_PATHS.get("spotify")
             if spotify_path and Path(spotify_path).exists():
                 if is_specific:
-                    # Use Spotify search URL — opens Spotify app directly to search page
-                    spotify_url = f"https://open.spotify.com/search/{search_encoded}"
+                    # Spotify URI deep link (primary - most reliable)
+                    spotify_uri = f"spotify:search:{query_clean}"
                     try:
+                        subprocess.Popen(
+                            [spotify_path, spotify_uri],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        time.sleep(3.5)
+
+                        # Validate and bring to front
+                        user32 = ctypes.windll.user32
+                        spotify_hwnd = user32.FindWindowW(None, "Spotify")
+                        if spotify_hwnd:
+                            user32.BringWindowToTop(spotify_hwnd)
+                            user32.ShowWindow(spotify_hwnd, 9)
+                            time.sleep(0.3)
+                            user32.SetForegroundWindow(spotify_hwnd)
+
+                        return ActionResult(
+                            success=True,
+                            data={"source": "spotify_uri", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
+                        )
+                    except Exception:
+                        pass
+
+                    # URL fallback if URI fails
+                    try:
+                        search_encoded = query_clean.replace(" ", "%20")
+                        spotify_url = f"https://open.spotify.com/search/{search_encoded}"
                         subprocess.Popen(
                             [spotify_path, spotify_url],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                        time.sleep(2.5)
-                        # Bring Spotify to foreground before sending keys
-                        user32 = ctypes.windll.user32
-                        spotify_hwnd = user32.FindWindowW(None, "Spotify")
-                        if spotify_hwnd:
-                            user32.SetForegroundWindow(spotify_hwnd)
-                            user32.ShowWindow(spotify_hwnd, 9)
-                            time.sleep(0.5)
-                        # Navigate to first track: Tab out of address bar, Down to first result, Enter
-                        VK_TAB = 0x09
-                        VK_DOWN = 0x28
-                        VK_ENTER = 0x0D
-                        KEYEVENTF_KEYUP = 0x0002
-                        user32.keybd_event(VK_TAB, 0, 0, 0)
-                        user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
-                        time.sleep(0.3)
-                        user32.keybd_event(VK_DOWN, 0, 0, 0)
-                        user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
-                        time.sleep(0.3)
-                        user32.keybd_event(VK_DOWN, 0, 0, 0)
-                        user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
-                        time.sleep(0.3)
-                        user32.keybd_event(VK_ENTER, 0, 0, 0)
-                        user32.keybd_event(VK_ENTER, 0, KEYEVENTF_KEYUP, 0)
+                        time.sleep(4.0)
                         return ActionResult(
                             success=True,
-                            data={"source": "spotify", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
+                            data={"source": "spotify_url", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
                         )
                     except Exception:
                         pass
+
+                    return ActionResult(
+                        success=False,
+                        error="Failed to launch Spotify with search. Please check Spotify installation.",
+                        data={"source": "spotify", "query": query_clean}
+                    )
                 else:
                     subprocess.Popen([spotify_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     time.sleep(1)

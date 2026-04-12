@@ -21,7 +21,7 @@ REQUEST_TIMEOUT = 30
 
 # Gemini free tier: 5 requests/minute → retry with backoff
 MAX_RETRIES = 2
-INITIAL_BACKOFF = 8  # seconds (reduced from 15 — faster retry on free tier)
+INITIAL_BACKOFF = 3  # seconds (reduced from 8 — faster retry for local usage)
 
 # How many recent steps to include as context
 CONTEXT_HISTORY_LIMIT = 5
@@ -322,13 +322,19 @@ class LLMOrchestrator:
     def _format_response_llm(
         self, request: str, steps: list[dict], results: list[Any]
     ) -> str:
-        """Use Gemini to format execution results into natural language."""
+        """Use Gemini to format execution results into natural language.
+        Falls back to simple formatting for known result types (faster).
+        """
+        # Fast path: skip LLM call for simple known results
+        results_summary = self._build_results_summary(results)
+        if self._is_simple_result_type(results):
+            # Skip expensive LLM call for simple results
+            return self._format_response_fallback(steps, results)
+
         try:
             client = self._get_client()
         except Exception:
             return self._format_response_fallback(steps, results)
-
-        results_summary = self._build_results_summary(results)
 
         prompt = RESPONSE_PROMPT.format(
             request=request,
@@ -360,6 +366,29 @@ class LLMOrchestrator:
                 break
 
         return self._format_response_fallback(steps, results)
+
+    def _is_simple_result_type(self, results: list[Any]) -> bool:
+        """Check if results are simple types that don't need LLM formatting."""
+        if not results:
+            return True
+        for r in results:
+            if r is None:
+                continue
+            if isinstance(r, dict):
+                # Check for common simple patterns
+                data = r.get("data", {})
+                if isinstance(data, dict):
+                    # Has spoken_message — already formatted
+                    if data.get("spoken_message"):
+                        return True
+                    # Has success/error pattern
+                    if "success" in data or "error" in data:
+                        return True
+            if isinstance(r, str):
+                # Plain strings are fine
+                if len(r) < 100:
+                    return True
+        return False
 
     def _build_results_summary(self, results: list[Any]) -> str:
         """Build a summary string of all results for the LLM."""
