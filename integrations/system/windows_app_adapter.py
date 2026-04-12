@@ -5,7 +5,10 @@ Works for Teams, Excel, Notepad, Calculator, File Explorer, and more.
 """
 
 import logging
+import os
 import time
+
+from pathlib import Path
 
 from ..base.adapter import ActionResult, BaseIntegrationAdapter
 
@@ -90,6 +93,9 @@ class WindowsAppAdapter(BaseIntegrationAdapter):
             "read_window_content",
             "teams_send_message",
             "teams_join_meeting",
+            "join_teams_meeting",
+            "get_teams_meetings",
+            "read_teams_messages",
             "notepad_read",
             "notepad_write",
             "explorer_navigate",
@@ -607,5 +613,206 @@ class WindowsAppAdapter(BaseIntegrationAdapter):
             return ActionResult(success=True, data={"written": len(text), "length": len(text)})
         except ImportError:
             return ActionResult(success=False, error="pyperclip not installed. Run: pip install pyperclip")
+        except Exception as e:
+            return ActionResult(success=False, error=str(e))
+
+    # ------------------------------------------------------------------ #
+    # Teams deep automation                                               #
+    # ------------------------------------------------------------------ #
+
+    def _find_teams_exe(self) -> str | None:
+        """Find Teams executable path."""
+        paths = [
+            Path(os.path.expandvars("%LOCALAPPDATA%")) / "Microsoft" / "Teams" / "Update.exe",
+            Path(os.path.expandvars("%APPDATA%")) / "Microsoft" / "Teams" / "Update.exe",
+            Path("C:/Users") / os.getenv("USERNAME", "") / "AppData" / "Local" / "Microsoft" / "Teams" / "Update.exe",
+        ]
+        for p in paths:
+            if p.exists():
+                return str(p)
+        return None
+
+    def _action_join_teams_meeting(self, meeting_name: str = "", meeting_link: str = "", **kwargs) -> ActionResult:
+        """Join a Teams meeting by name or link."""
+        try:
+            import subprocess
+            import ctypes
+
+            # If a direct link is provided, open it
+            if meeting_link:
+                subprocess.Popen(["cmd", "/c", "start", "", meeting_link],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(3)
+                return ActionResult(success=True, data={"action": "join", "meeting_link": meeting_link, "spoken_message": "Joining Teams meeting from link, sir."})
+
+            if not meeting_name:
+                return ActionResult(success=False, error="Specify meeting_name or meeting_link")
+
+            # Launch Teams and search for the meeting
+            teams_path = self._find_teams_exe()
+            if teams_path:
+                subprocess.Popen([teams_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(4)
+
+            # Use pywinauto to interact with Teams
+            try:
+                from pywinauto import Application
+                app = Application(backend="uia").connect(title_re="Microsoft Teams.*", timeout=5)
+                win = app.window(title_re="Microsoft Teams.*")
+                win.set_focus()
+                time.sleep(1)
+
+                user32 = ctypes.windll.user32
+
+                # Try Calendar view first (key combo Ctrl+2)
+                user32.keybd_event(0x11, 0, 0, 0)  # Ctrl
+                user32.keybd_event(0x32, 0, 0, 0)   # 2
+                user32.keybd_event(0x32, 0, 0x0002, 0)
+                user32.keybd_event(0x11, 0, 0x0002, 0)
+                time.sleep(2)
+
+                # Search for meeting
+                search = win.child_window(auto_id="searchInput", control_type="Edit")
+                if search.exists():
+                    search.set_edit_text(meeting_name)
+                    time.sleep(2)
+                    user32.keybd_event(0x0D, 0, 0, 0)  # Enter
+                    user32.keybd_event(0x0D, 0, 0x0002, 0)
+                    time.sleep(2)
+
+                # Try to find and click Join button
+                try:
+                    join_btn = win.child_window(title="Join", control_type="Button")
+                    if join_btn.exists():
+                        join_btn.click()
+                        time.sleep(3)
+                        # Confirm joining
+                        join_btn2 = win.child_window(title="Join now", control_type="Button")
+                        if join_btn2.exists():
+                            join_btn2.click()
+                except Exception:
+                    pass
+
+                return ActionResult(success=True, data={"meeting": meeting_name, "spoken_message": f"Searching for and joining {meeting_name}, sir."})
+
+            except ImportError:
+                return ActionResult(success=False, error="pywinauto not installed. Run: pip install pywinauto")
+            except Exception:
+                return ActionResult(success=False, error="Could not connect to Teams window")
+
+        except Exception as e:
+            return ActionResult(success=False, error=str(e))
+
+    def _action_get_teams_meetings(self, **kwargs) -> ActionResult:
+        """Get today's upcoming Teams meetings from calendar."""
+        try:
+            import subprocess
+            import ctypes
+
+            teams_path = self._find_teams_exe()
+            if not teams_path:
+                return ActionResult(success=False, error="Microsoft Teams not installed")
+
+            subprocess.Popen([teams_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(4)
+
+            try:
+                from pywinauto import Application
+                user32 = ctypes.windll.user32
+
+                app = Application(backend="uia").connect(title_re="Microsoft Teams.*", timeout=5)
+                win = app.window(title_re="Microsoft Teams.*")
+                win.set_focus()
+                time.sleep(1)
+
+                # Go to Calendar (Ctrl+2)
+                user32.keybd_event(0x11, 0, 0, 0)
+                user32.keybd_event(0x32, 0, 0, 0)
+                user32.keybd_event(0x32, 0, 0x0002, 0)
+                user32.keybd_event(0x11, 0, 0x0002, 0)
+                time.sleep(2)
+
+                # Try to read calendar content
+                meetings = []
+                try:
+                    calendar_pane = win.child_window(control_type="Pane")
+                    if calendar_pane.exists():
+                        text = calendar_pane.window_text()
+                        if text:
+                            lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 3]
+                            meetings = lines[:10]
+                except Exception:
+                    pass
+
+                if meetings:
+                    return ActionResult(success=True, data={"meetings": meetings, "count": len(meetings), "spoken_message": f"Found {len(meetings)} meetings today."})
+                return ActionResult(success=True, data={"meetings": [], "spoken_message": "No meetings found for today, sir."})
+
+            except ImportError:
+                return ActionResult(success=False, error="pywinauto not installed")
+            except Exception:
+                return ActionResult(success=False, error="Could not read Teams calendar")
+
+        except Exception as e:
+            return ActionResult(success=False, error=str(e))
+
+    def _action_read_teams_messages(self, channel: str = "General", count: int = 10, **kwargs) -> ActionResult:
+        """Read recent messages from a Teams channel."""
+        try:
+            import subprocess
+            import ctypes
+
+            teams_path = self._find_teams_exe()
+            if teams_path:
+                subprocess.Popen([teams_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(4)
+
+            try:
+                from pywinauto import Application
+                user32 = ctypes.windll.user32
+
+                app = Application(backend="uia").connect(title_re="Microsoft Teams.*", timeout=5)
+                win = app.window(title_re="Microsoft Teams.*")
+                win.set_focus()
+                time.sleep(1)
+
+                # Go to Teams (Ctrl+1)
+                user32.keybd_event(0x11, 0, 0, 0)
+                user32.keybd_event(0x31, 0, 0, 0)
+                user32.keybd_event(0x31, 0, 0x0002, 0)
+                user32.keybd_event(0x11, 0, 0x0002, 0)
+                time.sleep(2)
+
+                # Search for channel
+                search = win.child_window(auto_id="searchInput", control_type="Edit")
+                if search.exists():
+                    search.set_edit_text(channel)
+                    time.sleep(2)
+                    user32.keybd_event(0x0D, 0, 0, 0)
+                    user32.keybd_event(0x0D, 0, 0x0002, 0)
+                    time.sleep(2)
+
+                # Try to read messages from chat pane
+                messages = []
+                try:
+                    chat_pane = win.child_window(control_type="Document")
+                    if chat_pane.exists():
+                        text = chat_pane.window_text()
+                        if text:
+                            lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 2]
+                            messages = lines[-count:] if len(lines) > count else lines
+                except Exception:
+                    pass
+
+                if messages:
+                    msg_text = " | ".join(messages[:5])
+                    return ActionResult(success=True, data={"channel": channel, "messages": messages, "count": len(messages), "spoken_message": f"Recent from {channel}: {msg_text}"})
+                return ActionResult(success=True, data={"channel": channel, "messages": [], "spoken_message": f"No messages found in {channel}"})
+
+            except ImportError:
+                return ActionResult(success=False, error="pywinauto not installed")
+            except Exception:
+                return ActionResult(success=False, error="Could not read Teams channel")
+
         except Exception as e:
             return ActionResult(success=False, error=str(e))
