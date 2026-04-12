@@ -9,6 +9,7 @@ import threading
 import time as time_module
 import traceback
 from pathlib import Path
+import numpy as np  # noqa: E402 — used in hot audio callback path
 
 # ── Unicode safety: prevent crashes on Windows cp1252 console ──────────────────
 for _stream in (sys.stdout, sys.stderr):
@@ -16,9 +17,9 @@ for _stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             _stream.reconfigure(encoding="utf-8", errors="replace")
 
-import sounddevice as sd
-from google import genai
-from google.genai import types
+import sounddevice as _sounddevice_module  # deferred: loaded on first use
+from google import genai as _genai_module  # deferred: loaded on first use
+from google.genai import types as _genai_types  # deferred
 
 from actions.browser_control import browser_control
 from actions.audio_action import audio_action
@@ -85,6 +86,30 @@ _whatsapp_adapter = None
 _contacts_adapter = None
 _orchestrator = None
 _llm_orchestrator = None
+
+# ── Lazy import accessors (defer heavy module load at startup) ─────────────────
+
+_sd_instance = None
+
+def _get_sd():
+    global _sd_instance
+    if _sd_instance is None:
+        import sounddevice
+        _sd_instance = sounddevice
+    return _sd_instance
+
+_genai_client = None
+
+def _get_genai():
+    global _genai_client
+    if _genai_client is None:
+        from google import genai
+        _genai_client = genai
+    return _genai_client
+
+def _get_types():
+    from google.genai import types
+    return types
 
 
 def get_approval_workflow():
@@ -180,6 +205,24 @@ def get_orchestrator(ui=None):
         _orchestrator.register_adapter("outlook_native", get_outlook_native_adapter())
         _orchestrator.register_adapter("whatsapp", get_whatsapp_adapter())
         _orchestrator.register_adapter("contacts", get_contacts_adapter())
+
+        # HomeAssistant smart home (D)
+        try:
+            import json
+            config_path = Path("config/api_keys.json")
+            if config_path.exists():
+                keys = json.loads(config_path.read_text(encoding="utf-8"))
+                ha_config = keys.get("home_assistant", {})
+                if ha_config.get("url") and ha_config.get("token"):
+                    from integrations.home_assistant.home_assistant_adapter import HomeAssistantAdapter
+                    _orchestrator.register_adapter("homeassistant", HomeAssistantAdapter(
+                        url=ha_config["url"],
+                        token=ha_config["token"],
+                    ))
+                    ui.write_log("SYS: HomeAssistant adapter registered.")
+        except Exception as e:
+            logger.warning(f"[System] HomeAssistant registration skipped: {e}")
+
         # system and windows_app are instantiated on demand via lazy loading
         _orchestrator.register_adapter(
             "system",
@@ -862,18 +905,20 @@ TOOL_DECLARATIONS = [
         "name": "system_tool",
         "description": (
             "Native Windows system control -- open/close applications, install apps, "
-            "run commands, and get system info. Uses the system's installed applications "
-            "directly without any browser automation. "
+            "play music smartly, control media, and get system info. "
             "Sir: 'Open WhatsApp' -> system_tool(open_application). "
             "'Install VS Code' -> system_tool(install_app). "
             "'Show running apps' -> system_tool(list_running_apps). "
             "'Close Discord' -> system_tool(close_application). "
+            "'Play some jazz' -> system_tool(play_music, query: jazz). "
+            "'Stop the music' -> system_tool(control_media, action: stop). "
+            "'Next song' -> system_tool(control_media, action: next). "
             "'Run ipconfig' -> system_tool(run_command)."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":         {"type": "STRING", "description": "open_application | install_app | list_running_apps | close_application | run_command | get_system_info"},
+                "action":         {"type": "STRING", "description": "open_application | install_app | list_running_apps | close_application | run_command | get_system_info | control_media | get_active_window | play_music"},
                 "name":           {"type": "STRING", "description": "App name to open/close/install (for open_application, close_application, install_app)"},
                 "url":            {"type": "STRING", "description": "URL or download link (for open_application, install_app)"},
                 "command":        {"type": "STRING", "description": "Shell command to execute (for run_command)"},
@@ -881,6 +926,7 @@ TOOL_DECLARATIONS = [
                 "force":          {"type": "BOOLEAN","description": "Force kill (for close_application, default: false)"},
                 "wait":           {"type": "BOOLEAN","description": "Wait for command completion (for run_command, default: true)"},
                 "timeout":        {"type": "INTEGER","description": "Timeout in seconds (for run_command, default: 60)"},
+                "query":          {"type": "STRING", "description": "Music search query (for play_music, e.g. 'jazz' or 'lofi hip hop')"},
             },
             "required": ["action"]
         }
@@ -1083,8 +1129,8 @@ class JarvisLive:
         self._speech_cooldown = False  # Prevent re-triggering during speech
         self._cooldown_lock = threading.Lock()
 
-        # Local TTS fallback — used when Gemini live session is down
-        self._local_tts = _get_local_tts()
+        # Local TTS fallback — loaded lazily on first use (avoids startup blocking)
+        self._local_tts = None
 
         # Phase 4: Voice Robustness -- Echo detection with auto-expiring set
         self._recent_commands: collections.OrderedDict[str, float] = collections.OrderedDict()
@@ -1094,8 +1140,8 @@ class JarvisLive:
         self._speech_cooldown_duration = 1.0  # default 1.0s
         self._last_command_word_count  = 0
 
-        # Phase 4: Audio buffer -- holds last 3 seconds at 16kHz
-        self._audio_buffer    = collections.deque(maxlen=SEND_SAMPLE_RATE * 3)
+        # Phase 4: Audio buffer -- holds last 0.5 seconds at 16kHz (enough for wake word context)
+        self._audio_buffer    = collections.deque(maxlen=int(SEND_SAMPLE_RATE * 0.5))
         self._buffer_lock    = threading.Lock()
 
         # Phase 6: ConversationContextEngine -- tracks turns across the session
@@ -1201,8 +1247,11 @@ class JarvisLive:
     def speak(self, text: str):
         """Speak via Gemini live session. Falls back to local SAPI/Piper TTS if offline."""
         if not self._loop or not self.session:
-            # Fall back to local TTS — no live session needed
-            self._local_tts.speak_async(text)
+            # Fall back to local TTS — loaded lazily on first use
+            if self._local_tts is None:
+                self._local_tts = _get_local_tts()
+            if self._local_tts:
+                self._local_tts.speak_async(text)
             return
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -1230,7 +1279,23 @@ class JarvisLive:
         if hasattr(self, '_ctx'):
             self._ctx.on_interruption(jarvis_in_progress)
 
-        # 3. Set turn state
+        # 3. CRITICAL: Send interruption signal to Gemini Live API
+        # Without this, the model keeps generating until it finishes naturally.
+        # Send an empty turn with interruption=True to cancel the in-flight response.
+        if self.session and self._loop:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.session.send_client_content(
+                        turns={"parts": [{"text": ""}]},
+                        turn_complete=True,
+                        interruption=True
+                    ),
+                    self._loop
+                )
+            except Exception as e:
+                logging.getLogger("JARVIS").debug(f"Gemini interruption signal failed: {e}")
+
+        # 4. Set turn state
         self._turn_state = "interrupted"
         # Task 22: Reset interruption guard
         self._interruption_frames = 0
@@ -1423,16 +1488,16 @@ class JarvisLive:
             parts.insert(1, conv_ctx)
         parts.append(sys_prompt)
 
-        return types.LiveConnectConfig(
+        return _get_types().LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
             input_audio_transcription={},
             system_instruction="\n".join(parts),
             tools=[{"function_declarations": TOOL_DECLARATIONS}],
-            session_resumption=types.SessionResumptionConfig(),
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+            session_resumption=_get_types().SessionResumptionConfig(),
+            speech_config=_get_types().SpeechConfig(
+                voice_config=_get_types().VoiceConfig(
+                    prebuilt_voice_config=_get_types().PrebuiltVoiceConfig(
                         voice_name=self._load_voice_settings()["voice_name"]
                     )
                 )
@@ -1467,7 +1532,7 @@ class JarvisLive:
                 logging.getLogger("JARVIS").info(f'Cache hit for {name}')
                 if not self.ui.muted:
                     self.ui.set_state("LISTENING")
-                return types.FunctionResponse(
+                return _get_types().FunctionResponse(
                     id=fc.id, name=name,
                     response={"result": cached}
                 )
@@ -1482,7 +1547,7 @@ class JarvisLive:
                 logging.getLogger("Memory").info(f'save_memory: {category}/{key} = {value}')
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
-            return types.FunctionResponse(
+            return _get_types().FunctionResponse(
                 id=fc.id, name=name,
                 response={"result": "ok", "silent": True}
             )
@@ -1840,7 +1905,7 @@ class JarvisLive:
                 get_cache().set(name, args, result)
 
         # -- Result: tek cümle söyle, dur --------------------------------------
-        return types.FunctionResponse(
+        return _get_types().FunctionResponse(
             id=fc.id, name=name,
             response={"result": result}
         )
@@ -1860,8 +1925,6 @@ class JarvisLive:
         stop_event = asyncio.Event()
 
         def callback(indata, frames, time_info, status):
-            import numpy as np
-
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
             with self._cooldown_lock:
@@ -1870,8 +1933,13 @@ class JarvisLive:
             if jarvis_speaking:
                 # Task 22: Require sustained audio before interruption
                 # Measure RMS energy to distinguish real speech from ambient noise/spikes
-                audio_chunk = indata[:, 0].astype(np.float32) / 32768.0
-                rms = float(np.sqrt(np.mean(audio_chunk**2)))
+                # Fast RMS on raw int16 — avoids float32 cast, single pass
+                raw = indata[:, 0].ravel()
+                n = len(raw)
+                if n == 0:
+                    rms = 0.0
+                else:
+                    rms = float(np.sqrt(np.dot(raw, raw) / n)) / 32768.0
                 if rms > 0.01:  # Real audio above typical ambient noise
                     self._interruption_frames += 1
                     if self._interruption_frames >= self._min_interruption_frames:
@@ -1905,7 +1973,7 @@ class JarvisLive:
         self._get_buffered_audio = lambda: _get_buffered_audio(self)
 
         try:
-            with sd.InputStream(
+            with _get_sd().InputStream(
                 samplerate=SEND_SAMPLE_RATE,
                 channels=CHANNELS,
                 dtype="int16",
@@ -2029,16 +2097,21 @@ class JarvisLive:
                         # -- Boş turn YOK -- bu "Anladım." sorununu yaratıyordu --
 
         except Exception as e:
-            logging.getLogger("JARVIS").info(f'ERROR Recv: {e}')
-            traceback.print_exc()
-            raise
+            # Don't re-raise — let the TaskGroup handle cleanup gracefully.
+            # The outer reconnect loop in run() will restart everything.
+            err_str = str(e)
+            if "1011" in err_str or "Internal error" in err_str:
+                logging.getLogger("JARVIS").info('[API] Gemini Live session ended. Reconnecting...')
+            else:
+                logging.getLogger("JARVIS").error(f'ERROR Recv: {e}')
+                traceback.print_exc()
 
     async def _play_audio(self):
         logging.getLogger("JARVIS").info('PLAY Play started')
         asyncio.get_event_loop()
 
         # Sürekli açık output stream -- PyAudio'daki stream.write() davranışıyla aynı
-        stream = sd.RawOutputStream(
+        stream = _get_sd().RawOutputStream(
             samplerate=RECEIVE_SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
@@ -2058,7 +2131,7 @@ class JarvisLive:
             stream.close()
 
     async def run(self):
-        client = genai.Client(
+        client = _get_genai().Client(
             api_key=_get_api_key(),
             http_options={"api_version": "v1beta"}
         )
@@ -2088,8 +2161,13 @@ class JarvisLive:
                     tg.create_task(self._play_audio())
 
             except Exception as e:
-                logging.getLogger("JARVIS").info(f'[!] {e}')
-                traceback.print_exc()
+                err_str = str(e)
+                # Log 1011 API errors as info (not error) — these are expected reconnects
+                if "1011" in err_str or "Internal error" in err_str:
+                    logging.getLogger("JARVIS").warning(f'[API] Gemini Live connection dropped (1011). Reconnecting...')
+                else:
+                    logging.getLogger("JARVIS").error(f'[!] {e}')
+                    traceback.print_exc()
 
             self.set_speaking(False)
             self.ui.set_state("THINKING")
@@ -2234,17 +2312,10 @@ def main():
         else:
             logging.getLogger("JARVIS").info('GESTURE: Gesture control unavailable (mediapipe or camera missing)')
 
-        # Start the Audio Pipeline (wake word detection — say "Hey JARVIS" to activate)
-        try:
-            from actions.audio_action import get_pipeline
-            pipeline = get_pipeline()
-            # Wire pipeline responses to jarvis
-            pipeline.on_response = jarvis_speak_ref
-            pipeline.start()
-            ui.write_log("SYS: Wake word listening active.")
-            logging.getLogger("JARVIS").info("AUDIO Pipeline started — say 'Hey JARVIS' to activate")
-        except Exception as e:
-            logging.getLogger("JARVIS").info(f'AUDIO Pipeline failed to start: {e}')
+        # NOTE: Audio Pipeline (wake word) is disabled — JarvisLive handles all audio
+        # via Gemini Live streaming. Starting both causes microphone buffer conflicts.
+        # To enable wake word mode: call audio_pipeline(start) via voice command.
+        logging.getLogger("JARVIS").info("AUDIO Pipeline disabled (conflicts with Gemini Live)")
 
         # Start the Screen Watchdog (JARVIS's proactive eyes)
         watchdog = get_screen_watchdog()
@@ -2266,13 +2337,6 @@ def main():
         # Task 18: Wire GestureController into ConversationContextEngine
         _gesture.set_conversation_context(jarvis._ctx)
         proactive.set_dnd_check(_gesture.is_do_not_disturb)
-
-        # Wire emotion detection callback from audio pipeline to TTS
-        try:
-            pipeline = get_pipeline()
-            pipeline.on_emotion = jarvis._on_emotion
-        except Exception:
-            pass
 
         # Task 17: Get resumption greeting from previous session
         greeting = jarvis._session_mgr.get_resumption_greeting()
