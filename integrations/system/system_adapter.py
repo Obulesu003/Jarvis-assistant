@@ -636,9 +636,30 @@ class SystemAutomationAdapter(BaseIntegrationAdapter):
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                    time.sleep(2)
-                    # Press Enter to play the first search result
-                    self._send_enter_to_spotify()
+                    time.sleep(2.5)
+                    # Bring Spotify to foreground before sending keys
+                    user32 = ctypes.windll.user32
+                    spotify_hwnd = user32.FindWindowW(None, "Spotify")
+                    if spotify_hwnd:
+                        user32.SetForegroundWindow(spotify_hwnd)
+                        user32.ShowWindow(spotify_hwnd, 9)  # SW_RESTORE = 9
+                        time.sleep(0.5)
+                    # Navigate to first track: Tab out of address bar, Down to first result, Enter
+                    VK_TAB = 0x09
+                    VK_DOWN = 0x28
+                    VK_ENTER = 0x0D
+                    KEYEVENTF_KEYUP = 0x0002
+                    user32.keybd_event(VK_TAB, 0, 0, 0)
+                    user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
+                    time.sleep(0.3)
+                    user32.keybd_event(VK_DOWN, 0, 0, 0)
+                    user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
+                    time.sleep(0.3)
+                    user32.keybd_event(VK_DOWN, 0, 0, 0)
+                    user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
+                    time.sleep(0.3)
+                    user32.keybd_event(VK_ENTER, 0, 0, 0)
+                    user32.keybd_event(VK_ENTER, 0, KEYEVENTF_KEYUP, 0)
                     return ActionResult(
                         success=True,
                         data={"source": "spotify_search", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
@@ -658,9 +679,30 @@ class SystemAutomationAdapter(BaseIntegrationAdapter):
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                        time.sleep(2)
-                        # Press Enter to play the first search result
-                        self._send_enter_to_spotify()
+                        time.sleep(2.5)
+                        # Bring Spotify to foreground before sending keys
+                        user32 = ctypes.windll.user32
+                        spotify_hwnd = user32.FindWindowW(None, "Spotify")
+                        if spotify_hwnd:
+                            user32.SetForegroundWindow(spotify_hwnd)
+                            user32.ShowWindow(spotify_hwnd, 9)
+                            time.sleep(0.5)
+                        # Navigate to first track: Tab out of address bar, Down to first result, Enter
+                        VK_TAB = 0x09
+                        VK_DOWN = 0x28
+                        VK_ENTER = 0x0D
+                        KEYEVENTF_KEYUP = 0x0002
+                        user32.keybd_event(VK_TAB, 0, 0, 0)
+                        user32.keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0)
+                        time.sleep(0.3)
+                        user32.keybd_event(VK_DOWN, 0, 0, 0)
+                        user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
+                        time.sleep(0.3)
+                        user32.keybd_event(VK_DOWN, 0, 0, 0)
+                        user32.keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, 0)
+                        time.sleep(0.3)
+                        user32.keybd_event(VK_ENTER, 0, 0, 0)
+                        user32.keybd_event(VK_ENTER, 0, KEYEVENTF_KEYUP, 0)
                         return ActionResult(
                             success=True,
                             data={"source": "spotify", "query": query_clean, "spoken_message": f"Playing {query_clean} on Spotify, sir."}
