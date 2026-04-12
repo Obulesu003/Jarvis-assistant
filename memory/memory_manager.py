@@ -11,6 +11,8 @@ Düzeltmeler:
 import logging  # migrated from print()
 import json
 import sys
+import time as time_module
+import threading
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -26,6 +28,17 @@ BASE_DIR         = get_base_dir()
 MEMORY_PATH      = BASE_DIR / "memory" / "long_term.json"
 _lock            = Lock()
 MAX_VALUE_LENGTH = 400
+
+# ── Performance: Write-behind batching ─────────────────────────────────────
+_pending_writes: list[dict] = []      # accumulated memory updates
+_write_pending_since: float = 0.0    # timestamp of first pending write
+_write_batch_interval: float = 5.0   # flush after 5s of pending writes
+_write_batch_count: int = 3         # or after 3 accumulated updates
+
+# ── Performance: LRU read cache ──────────────────────────────────────────
+_memory_cache: dict | None = None   # in-memory copy (LRU)
+_cache_ttl: float = 10.0            # cache valid for 10s
+_cache_stamp: float = 0.0           # when cache was loaded
 
 
 def _empty_memory() -> dict:
@@ -44,9 +57,19 @@ def _empty_memory() -> dict:
 
 
 def load_memory() -> dict:
+    global _memory_cache, _cache_stamp
+
+    # ── LRU cache: return cached copy if still fresh ───────────────────────
+    now = time_module.monotonic()
+    if _memory_cache is not None and (now - _cache_stamp) < _cache_ttl:
+        return _memory_cache
+
     if not MEMORY_PATH.exists():
         logging.getLogger("Memory").info('INFO No memory file found, starting fresh')
-        return _empty_memory()
+        data = _empty_memory()
+        _memory_cache = data
+        _cache_stamp = now
+        return data
 
     with _lock:
         try:
@@ -58,24 +81,74 @@ def load_memory() -> dict:
                         data[key] = {}
                 # Count non-empty memory entries for debug
                 non_empty = sum(1 for v in data.values() if isinstance(v, dict) and len(v) > 0)
-                logging.getLogger("Memory").info('INFO Loaded {non_empty} categories from {MEMORY_PATH}')
+                logging.getLogger("Memory").info(f'INFO Loaded {non_empty} categories from {MEMORY_PATH}')
+                _memory_cache = data
+                _cache_stamp = now
                 return data
             logging.getLogger("Memory").info('WARN Memory file corrupted (not a dict), starting fresh')
-            return _empty_memory()
+            data = _empty_memory()
+            _memory_cache = data
+            _cache_stamp = now
+            return data
         except Exception as e:
-            logging.getLogger("Memory").info('WARN Load error: {e}, starting fresh')
-            return _empty_memory()
+            logging.getLogger("Memory").info(f'WARN Load error: {e}, starting fresh')
+            data = _empty_memory()
+            _memory_cache = data
+            _cache_stamp = now
+            return data
+
+
+def _flush_pending_writes() -> None:
+    """Write all pending batched updates to disk (called by background thread)."""
+    global _pending_writes, _write_pending_since, _memory_cache
+    if not _pending_writes:
+        return
+
+    with _lock:
+        # Merge all pending writes into a single memory load + update
+        try:
+            memory = _empty_memory()
+            if MEMORY_PATH.exists():
+                try:
+                    memory = json.loads(MEMORY_PATH.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+            # Apply all pending updates
+            for update in _pending_writes:
+                _recursive_update(memory, update)
+
+            MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            MEMORY_PATH.write_text(
+                json.dumps(memory, indent=2, ensure_ascii=False),
+                encoding="utf-8"
+            )
+            _memory_cache = memory
+            _cache_stamp = time_module.monotonic()
+            logging.getLogger("Memory").info(f'Batch-flushed {len(_pending_writes)} updates')
+        except Exception as e:
+            logging.getLogger("Memory").info(f'WARN Batch flush failed: {e}')
+        finally:
+            _pending_writes = []
+            _write_pending_since = 0.0
+
+
+def _schedule_flush() -> None:
+    """Kick off a delayed batch flush in a background thread."""
+    def delayed_flush():
+        time_module.sleep(_write_batch_interval)
+        _flush_pending_writes()
+    threading.Thread(target=delayed_flush, daemon=True, name="MemoryFlush").start()
 
 
 def save_memory(memory: dict) -> None:
     if not isinstance(memory, dict):
         return
-    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with _lock:
-        MEMORY_PATH.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
+    # Invalidate cache so next read sees fresh data
+    global _memory_cache, _cache_stamp
+    _memory_cache = memory
+    _cache_stamp = time_module.monotonic()
+    _flush_pending_writes()  # Write immediately (synchronous for critical saves)
 
 
 def _truncate_value(val: str) -> str:
@@ -114,14 +187,26 @@ def _recursive_update(target: dict, updates: dict) -> bool:
 
 
 def update_memory(memory_update: dict) -> dict:
+    global _pending_writes, _write_pending_since
+
     if not isinstance(memory_update, dict) or not memory_update:
         return load_memory()
 
-    memory = load_memory()
-    if _recursive_update(memory, memory_update):
-        save_memory(memory)
-        logging.getLogger("Memory").info('Saved: {list(memory_update.keys())}')
-    return memory
+    # Check if this is a significant change by checking if any key is new/changed
+    current = load_memory()
+    has_real_change = _recursive_update(current.copy(), memory_update)
+
+    if has_real_change:
+        _pending_writes.append(memory_update)
+        if _write_pending_since == 0.0:
+            _write_pending_since = time_module.monotonic()
+        # Trigger batch flush if threshold reached
+        if len(_pending_writes) >= _write_batch_count:
+            _flush_pending_writes()
+        else:
+            _schedule_flush()
+        logging.getLogger("Memory").info(f'Queued: {list(memory_update.keys())} (batch {len(_pending_writes)})')
+    return current
 
 
 def should_extract_memory(user_text: str, jarvis_text: str, api_key: str) -> bool:

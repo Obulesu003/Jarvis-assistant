@@ -66,31 +66,148 @@ class LLMOrchestrator:
 
     def execute(self, user_request: str, context: dict[str, Any] | None = None) -> str:
         """
-        Execute a user request using LLM-powered intent classification.
+        Execute a user request.
 
-        Falls back to keyword matching if LLM is unavailable.
+        Fast path: keyword router first (near-instant, no API call).
+        Smart path: Gemini combined call for complex/natural requests.
+        Fallback: keyword router + LLM response formatting.
         """
         context = context or {}
-
         logger.info("[LLMOrchestrator] Request: %s", user_request[:100])
 
-        # Phase 1: Plan steps using LLM
-        steps = self._plan_steps_llm(user_request, context)
-
-        if not steps:
-            # Fallback to keyword matching
-            logger.info("[LLMOrchestrator] LLM returned no steps, trying keyword fallback")
-            steps = self._plan_steps_keyword(user_request, user_request.lower(), context)
-
+        # ── Fast path: keyword router (no API latency) ─────────────────────
+        steps = self._orch._plan_steps(user_request, user_request.lower(), context)
         if steps:
-            # Phase 2: Execute steps
             results = self._execute_steps(steps)
+            # Format response — try LLM for natural speech, fall back to simple format
+            try:
+                return self._format_response_llm(user_request, steps, results)
+            except Exception:
+                return self._format_response_fallback(steps, results)
 
-            # Phase 3: Format response using LLM
+        # ── Smart path: LLM combined (planning + response in one call) ───
+        return self.execute_combined(user_request, context)
+
+    # ── Combined single-call mode (Phase 1+3 merged) ────────────────────────
+
+    def execute_combined(self, user_request: str, context: dict[str, Any] | None = None) -> str:
+        """
+        Single-API-call approach: planning + execution + response in one request.
+        Falls back to the two-call approach if this fails.
+        """
+        context = context or {}
+        logger.info("[LLMOrchestrator] Combined request: %s", user_request[:100])
+
+        try:
+            client = self._get_client()
+        except Exception as e:
+            logger.warning("[LLMOrchestrator] Gemini unavailable: %s", e)
+            return self._fallback_via_two_call(user_request, context)
+
+        capabilities = self._build_capability_prompt()
+        context_str = self._build_context_string(context)
+        history_str = self._build_history_string(context.get("recent_steps", []))
+
+        # Inject memory + pattern context
+        prompt_parts = []
+        try:
+            bridge = self._get_memory_bridge()
+            if bridge:
+                memory_ctx = bridge.build_context(user_request)
+                if memory_ctx:
+                    prompt_parts.append(memory_ctx)
+        except Exception:
+            pass
+        try:
+            learner = self._get_pattern_learner()
+            if learner:
+                adaptive = learner.get_adaptive_context(user_request)
+                if adaptive:
+                    prompt_parts.append(f"Learned patterns:\n{adaptive}")
+        except Exception:
+            pass
+
+        prompt = COMBINED_PROMPT.format(
+            request=user_request,
+            capabilities=capabilities,
+            context=context_str,
+            history=history_str,
+            memory_context="\n".join(prompt_parts) if prompt_parts else "",
+        )
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+                text = response.text.strip()
+                logger.debug("[LLMOrchestrator] Combined response: %s", text[:500])
+
+                parsed = self._parse_combined_response(text)
+                if not parsed:
+                    logger.info("[LLMOrchestrator] Combined parse failed, falling back to two-call")
+                    return self._fallback_via_two_call(user_request, context, steps_from_llm=None)
+
+                steps = parsed.get("steps", [])
+                response_template = parsed.get("response_template", "")
+
+                results = self._execute_steps(steps) if steps else []
+
+                if response_template:
+                    return self._fill_response_template(response_template, steps, results)
+
+                return self._format_response_llm(user_request, steps, results)
+
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate limit" in error_str or "quota" in error_str:
+                    if attempt < MAX_RETRIES - 1:
+                        backoff = INITIAL_BACKOFF * (2 ** attempt)
+                        logger.warning(
+                            "[LLMOrchestrator] Combined rate limited (attempt %d/%d), waiting %ds",
+                            attempt + 1, MAX_RETRIES, backoff,
+                        )
+                        time.sleep(backoff)
+                        continue
+                logger.warning("[LLMOrchestrator] Combined call failed: %s — falling back", e)
+                return self._fallback_via_two_call(user_request, context)
+
+        return self._fallback_via_two_call(user_request, context)
+
+    def _parse_combined_response(self, text: str) -> dict | None:
+        """Parse the combined planning+response JSON from LLM."""
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        json_str = json_match.group(1) if json_match else text.strip()
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            return None
+
+    def _fill_response_template(
+        self, template: str, steps: list[dict], results: list[Any]
+    ) -> str:
+        """Substitute ${results.N} placeholders in the response template."""
+        text = template
+        for i, result in enumerate(results):
+            placeholder = f"${{results.{i}}}"
+            if placeholder in text:
+                summary = self._summarize_result(result) if isinstance(result, dict) else str(result)
+                text = text.replace(placeholder, summary, 1)
+        return text
+
+    def _fallback_via_two_call(
+        self, user_request: str, context: dict[str, Any], steps_from_llm: list | None = None
+    ) -> str:
+        """Fallback using the original two-call approach."""
+        steps = steps_from_llm
+        if steps is None:
+            steps = self._plan_steps_llm(user_request, context)
+        if not steps:
+            steps = self._plan_steps_keyword(user_request, user_request.lower(), context)
+        if steps:
+            results = self._execute_steps(steps)
             return self._format_response_llm(user_request, steps, results)
-
-        # Final fallback: return a graceful response when nothing works
-        logger.warning("[LLMOrchestrator] All planning methods failed — returning fallback response")
         return self._fallback_response()
 
     # ------------------------------------------------------------------ #
@@ -496,9 +613,18 @@ class LLMOrchestrator:
             return "No additional context."
 
         parts = []
+        # conversation_history: the actual conversation turns
+        conv_hist = context.get("conversation_history", "")
+        if conv_hist:
+            parts.append(f"CONVERSATION HISTORY:\n{conv_hist[:800]}")
+        # current_task: what the user is currently trying to do
+        current_task = context.get("current_task", "")
+        if current_task:
+            parts.append(f"CURRENT TASK: {current_task}")
+        # Other context fields
         for key, value in context.items():
-            if key in ("recent_steps", "last_email_id"):
-                continue  # Handled separately
+            if key in ("recent_steps", "last_email_id", "conversation_history", "current_task"):
+                continue
             if value:
                 parts.append(f"- {key}: {str(value)[:200]}")
 
@@ -728,4 +854,50 @@ Execution results:
 {results_summary}
 
 Respond with only the response text (no JSON, no markdown).
+""".strip()
+
+COMBINED_PROMPT = """
+You are the planning + response engine for MARK-XXXV, a Windows personal assistant.
+Return a single JSON object with your plan AND a natural-language response template.
+The response will be spoken aloud — keep it under 3 sentences.
+
+## TASK
+Given the user request, decide what to do AND how to report back — in ONE pass.
+
+## CAPABILITIES
+{capabilities}
+
+## SESSION CONTEXT
+{context}
+
+## RECENT STEPS
+{history}
+
+## MEMORY CONTEXT
+{memory_context}
+
+## USER REQUEST
+{request}
+
+## RESPONSE FORMAT
+Return valid JSON with two fields:
+1. "steps": list of execution steps (same format as before — adapter, action, params, description)
+2. "response_template": Natural language response using these placeholders:
+   - ${{results.0}} through ${{results.N}} — will be replaced with step results
+   - Example: "Found ${{results.0}}, sir." or "Done. ${{results.0}}"
+
+If no action is needed, return: {{"steps": [], "response_template": "Done, sir."}}
+
+Example response:
+{{
+  "steps": [
+    {{
+      "adapter": "outlook_native",
+      "action": "get_unread_count",
+      "params": {{}},
+      "description": "Check unread email count"
+    }}
+  ],
+  "response_template": "You have ${{results.0}} unread emails, sir."
+}}
 """.strip()

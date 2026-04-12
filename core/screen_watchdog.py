@@ -38,7 +38,7 @@ class ScreenWatchdog:
     - Any text that looks important but was not there last time
     """
 
-    INTERVAL = 30  # seconds between captures
+    INTERVAL = 120  # 2 minutes between captures (was 30s — too frequent)
     MAX_HISTORY = 10  # keep last N descriptions for comparison
 
     def __init__(self, gemini_client=None):
@@ -122,7 +122,7 @@ Respond ONLY as JSON:
 
         try:
             response = self._gemini.generate_content(
-                model="gemini-2.0-flash-exp",
+                model="gemini-2.5-flash-lite",
                 contents=[prompt, img_base64]
             )
             text = response.text if hasattr(response, "text") else str(response)
@@ -203,13 +203,8 @@ Respond ONLY as JSON:
                 window_title = self._get_window_title()
 
                 # Quick keyword check first (fast)
-                # Re-capture for analysis (higher quality)
-                img_bytes_hq = self._capture_screen()
-                if not img_bytes_hq:
-                    img_bytes_hq = img_bytes
-
-                # Analyze with AI
-                result = self._analyze_screen(img_bytes_hq, window_title)
+                # Analyze with AI using the same capture (no second capture needed)
+                result = self._analyze_screen(img_bytes, window_title)
                 description = result.get("description", "")
                 is_important = result.get("is_important", False)
 

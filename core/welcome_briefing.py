@@ -82,22 +82,24 @@ class WelcomeBriefing:
         hour = datetime.now().hour
         self._is_morning = 5 <= hour < 12
 
-        # Play epic intro music FIRST - the "wow moment"
+        # Play clean JARVIS startup beeps FIRST - the "wow moment"
         _play_music("startup")
 
-        # Base greeting with JARVIS personality
-        if self._is_morning:
-            if self._is_first_start:
-                items.append("Good morning, Bobby. I hope you slept well.")
-                items.append("JARVIS is online. Systems operational.")
+        # JARVIS-style greeting - short, crisp, no fluff
+        if self._is_first_start:
+            if self._is_morning:
+                items.append("Good morning, Bobby. All systems online.")
             else:
-                items.append("Good morning. Welcome back.")
-        elif 12 <= hour < 17:
-            items.append("Good afternoon, Bobby.")
-        elif 17 <= hour < 21:
-            items.append("Good evening, Bobby.")
+                items.append("JARVIS online, Bobby. Systems nominal.")
         else:
-            items.append("Good night, Bobby. Working late?")
+            if self._is_morning:
+                items.append("Good morning. Welcome back, sir.")
+            elif 12 <= hour < 17:
+                items.append("Good afternoon, Bobby.")
+            elif 17 <= hour < 21:
+                items.append("Good evening, Bobby.")
+            else:
+                items.append("Working late, Bobby?")
 
         self._is_first_start = False
         return items
@@ -131,7 +133,7 @@ class WelcomeBriefing:
 
         # Final closing
         if self._speak:
-            self._speak("Briefing complete. How may I assist you?")
+            self._speak("Briefing complete. Standing by for your command, sir.")
 
         logger.info("[Briefing] Briefing complete")
 
@@ -158,6 +160,7 @@ class WelcomeBriefing:
                 executor.submit(self._check_weather),
                 executor.submit(self._check_reminders),
                 executor.submit(self._check_memory),
+                executor.submit(self._check_running_apps),
             ]
 
             for future in futures:
@@ -171,60 +174,74 @@ class WelcomeBriefing:
         return items
 
     def _check_emails(self) -> dict | None:
-        """Check for new emails."""
+        """Check for new emails using native Outlook (no browser)."""
         try:
-            from integrations.outlook.outlook_adapter import OutlookAdapter
-            adapter = OutlookAdapter()
+            from integrations.outlook.outlook_native_adapter import OutlookNativeAdapter
+            adapter = OutlookNativeAdapter()
             result = adapter.execute_action("list_emails", folder="Inbox", max_results=5, unread_only=True)
 
             if result and hasattr(result, 'data'):
                 emails = result.data.get("emails", [])
                 if emails:
                     count = len(emails)
+                    # Show actual subjects - not just a count
+                    subjects = [e.get("subject", "No subject") for e in emails[:3]]
                     if count == 1:
-                        return {
-                            "category": "email",
-                            "speech": f"You have one unread email.",
-                            "data": emails,
-                            "should_speak": True,
-                        }
+                        speech = f"You have one unread email from {emails[0].get('sender', 'someone')}: {emails[0].get('subject', 'No subject')}"
+                    elif count <= 3:
+                        subject_list = ". ".join(subjects)
+                        speech = f"You have {count} unread emails: {subject_list}"
                     else:
-                        return {
-                            "category": "email",
-                            "speech": f"You have {count} unread emails.",
-                            "data": emails,
-                            "should_speak": True,
-                        }
+                        subject_list = ". ".join(subjects)
+                        speech = f"You have {count} unread emails. Top subjects: {subject_list}. And {count - 3} more."
+                    return {
+                        "category": "email",
+                        "speech": speech,
+                        "data": emails,
+                        "should_speak": True,
+                    }
             return None
         except Exception as e:
             logger.debug(f"[Briefing] Email check failed: {e}")
             return None
 
     def _check_calendar(self) -> dict | None:
-        """Check today's calendar events."""
+        """Check today's calendar events using native Outlook (no browser)."""
         try:
-            from integrations.outlook.outlook_adapter import OutlookAdapter
-            adapter = OutlookAdapter()
+            from integrations.outlook.outlook_native_adapter import OutlookNativeAdapter
+            adapter = OutlookNativeAdapter()
             today = datetime.now().strftime("%Y-%m-%d")
-            result = adapter.execute_action("list_events", date=today, max_results=5)
+            result = adapter.execute_action("list_calendar_events", start_date=today, end_date=today, max_results=5)
 
             if result and hasattr(result, 'data'):
                 events = result.data.get("events", [])
                 if events:
+                    # Show actual event details with times
+                    event_parts = []
+                    for ev in events[:4]:
+                        title = ev.get("title", "Busy")
+                        start_str = ev.get("start", "")
+                        try:
+                            start_dt = datetime.strptime(start_str[:16], "%Y-%m-%d %H:%M:%S")
+                            time_str = start_dt.strftime("%-I:%M %p")
+                        except Exception:
+                            time_str = "TBD"
+                        event_parts.append(f"{title} at {time_str}")
+
                     if len(events) == 1:
-                        return {
-                            "category": "calendar",
-                            "speech": f"You have one event today: {events[0].get('title', 'Busy')}",
-                            "data": events,
-                            "should_speak": True,
-                        }
+                        speech = f"Today's event: {event_parts[0]}"
+                    elif len(events) <= 4:
+                        event_list = ". ".join(event_parts)
+                        speech = f"You have {len(events)} events today: {event_list}"
                     else:
-                        return {
-                            "category": "calendar",
-                            "speech": f"You have {len(events)} events today.",
-                            "data": events,
-                            "should_speak": True,
-                        }
+                        event_list = ". ".join(event_parts)
+                        speech = f"You have {len(events)} events today. Up next: {event_list}. And {len(events) - 4} more."
+                    return {
+                        "category": "calendar",
+                        "speech": speech,
+                        "data": events,
+                        "should_speak": True,
+                    }
             return None
         except Exception as e:
             logger.debug(f"[Briefing] Calendar check failed: {e}")
@@ -293,6 +310,66 @@ class WelcomeBriefing:
             return None
         except Exception as e:
             logger.debug(f"[Briefing] Memory check failed: {e}")
+            return None
+
+    def _check_running_apps(self) -> dict | None:
+        """Check what apps are running and identify the active window."""
+        try:
+            from integrations.system.system_adapter import SystemAutomationAdapter
+            adapter = SystemAutomationAdapter()
+            result = adapter.execute_action("list_running_apps")
+
+            if result and hasattr(result, 'data'):
+                apps_data = result.data.get("apps", [])
+
+                # Get active window
+                try:
+                    from core.screen_monitor import ScreenMonitor
+                    sm = ScreenMonitor()
+                    active_window = sm.get_active_window_title()
+                except Exception:
+                    active_window = ""
+
+                # Identify media/music players
+                media_keywords = ["spotify", "youtube", "vlc", "music", "groove",
+                                 "audacity", "chrome", "firefox", "edge", "whatsapp",
+                                 "discord", "telegram", "teams", "zoom", "slack",
+                                 "notepad", "vscode", "code", "terminal", "cmd",
+                                 "powershell", "explorer", "outlook", "excel",
+                                 "word", "powerpoint", "paint", "taskbar"]
+
+                notable_apps = []
+                for app in apps_data:
+                    name_lower = app.get("name", "").lower()
+                    for keyword in media_keywords:
+                        if keyword in name_lower:
+                            display_name = app.get("name", "?").replace(".exe", "")
+                            if display_name not in notable_apps:
+                                notable_apps.append(display_name)
+                            break
+
+                # Build context-aware summary
+                parts = []
+                if active_window and active_window not in ["Unknown", "No active window"]:
+                    parts.append(f"Active window: {active_window}")
+
+                if notable_apps:
+                    visible_apps = notable_apps[:6]  # Cap at 6 for brevity
+                    if len(notable_apps) > 6:
+                        parts.append(f"Running: {', '.join(visible_apps)} and {len(notable_apps) - 6} more")
+                    else:
+                        parts.append(f"Running: {', '.join(visible_apps)}")
+
+                if parts:
+                    return {
+                        "category": "apps",
+                        "speech": " | ".join(parts),
+                        "data": {"active": active_window, "apps": notable_apps},
+                        "should_speak": True,
+                    }
+            return None
+        except Exception as e:
+            logger.debug(f"[Briefing] Running apps check failed: {e}")
             return None
 
     def _load_memory(self) -> dict:

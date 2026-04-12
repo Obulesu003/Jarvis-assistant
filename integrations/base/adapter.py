@@ -46,6 +46,33 @@ class ActionResult:
             "approval_summary": self.approval_summary,
         }
 
+    def __str__(self) -> str:
+        """Human-readable string for TTS and logging."""
+        if not self.success:
+            return f"Failed: {self.error or 'Unknown error'}"
+        if self.data and isinstance(self.data, dict):
+            # Prefer a spoken_message field, then summarize the data
+            msg = self.data.get("spoken_message")
+            if msg:
+                return msg
+            # Media operations: tell the user what happened
+            if "source" in self.data:
+                source = self.data.get("source", "")
+                query = self.data.get("query", "")
+                if source == "spotify":
+                    return f"Opening Spotify{f' to play {query}' if query else ''}, sir."
+                if source == "youtube_music":
+                    return f"Opening YouTube Music{f' to search for {query}' if query else ''}, sir."
+                if source == "resume":
+                    player = self.data.get("player", "the player")
+                    return f"Resuming playback in {player}, sir."
+                if source == "spotify_running":
+                    return f"Spotify is already open. Resuming playback, sir."
+            return f"Done, sir."
+        if self.data:
+            return f"Done: {self.data}"
+        return "Done, sir."
+
 
 class BaseIntegrationAdapter(ABC):
     """
@@ -123,7 +150,7 @@ class BaseIntegrationAdapter(ABC):
     def execute_action(self, action: str, **kwargs):
         """
         High-level action dispatcher. Maps action name to _action_* method.
-        Returns a human-readable result string for main.py.
+        Returns a human-readable result string for main.py (TTS-friendly).
         """
         method_name = f"_action_{action}"
         method = getattr(self, method_name, None)
@@ -132,17 +159,10 @@ class BaseIntegrationAdapter(ABC):
 
         result = method(**kwargs)
 
+        # Use ActionResult's __str__ for clean TTS-friendly output
         if isinstance(result, ActionResult):
-            if result.success:
-                if result.data:
-                    if isinstance(result.data, dict):
-                        if "error" in result.data:
-                            return f"Error: {result.data['error']}"
-                        parts = [f"{k}={v}" for k, v in result.data.items() if k not in ("success",)]
-                        return ", ".join(parts) if parts else "Done."
-                    return str(result.data)
-                return "Done."
-            return f"Failed: {result.error}" if result.error else "Operation failed."
+            return str(result)
+
         return str(result)
 
     def get_health(self) -> HealthStatus:

@@ -1817,8 +1817,12 @@ class JarvisLive:
                     result = "Please tell me what you'd like me to do, sir."
                 else:
                     orchestrator = get_llm_orchestrator(ui=self.ui)
+                    conv_mgr = get_conversation_manager()
+                    # Build rich context: conversation history + recent steps + memory
                     context = {
                         "recent_steps": getattr(self, "_recent_steps", [])[-5:],
+                        "conversation_history": conv_mgr.get_context_for_prompt(),
+                        "current_task": getattr(self, "_current_task", ""),
                     }
                     r = await loop.run_in_executor(None, lambda: orchestrator.execute(request, context))
                     # Track recent steps for context

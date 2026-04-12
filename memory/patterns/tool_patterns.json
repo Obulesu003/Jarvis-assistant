@@ -4,6 +4,21 @@
       "count": 1,
       "helpful": 0,
       "unhelpful": 0
+    },
+    "system_tool": {
+      "count": 3,
+      "helpful": 0,
+      "unhelpful": 0
+    },
+    "web_search": {
+      "count": 2,
+      "helpful": 0,
+      "unhelpful": 0
+    },
+    "open_app -> system_tool": {
+      "count": 4,
+      "helpful": 0,
+      "unhelpful": 0
     }
   },
   "feedback": {}

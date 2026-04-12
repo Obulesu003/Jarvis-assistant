@@ -184,7 +184,7 @@ class UniversalOrchestrator:
             return steps
 
         # List emails
-        if any(kw in rl for kw in ["list my email", "show my email", "show me email", "read my email", "latest emails", "recent emails", "my emails"]):
+        if any(kw in rl for kw in ["list my email", "show my email", "show me email", "read my email", "latest emails", "recent emails", "my emails", "my unread emails", "show unread emails", "read unread emails", "get my emails", "what emails"]):
             unread_only = "unread" in rl
             steps.append({
                 "adapter": "outlook_native",
@@ -195,7 +195,7 @@ class UniversalOrchestrator:
             return steps
 
         # Check emails (but NOT for reminder/schedule requests)
-        if "check email" in rl and not any(kw in rl for kw in ["remind", "reminder", "schedule me", "set reminder", "every morning", "every evening", "every night", "every day", "every weekday", "every hour"]):
+        if any(kw in rl for kw in ["check email", "check emails", "checking email", "check my email"]) and not any(kw in rl for kw in ["remind", "reminder", "schedule me", "set reminder", "every morning", "every evening", "every night", "every day", "every weekday", "every hour"]):
             unread_only = "unread" in rl
             steps.append({
                 "adapter": "outlook_native",
@@ -312,7 +312,7 @@ class UniversalOrchestrator:
         # CALENDAR OPERATIONS                                             #
         # ================================================================ #
 
-        if any(kw in rl for kw in ["calendar", "meeting", "appointments"]):
+        if any(kw in rl for kw in ["calendar", "appointments", "what meetings", "today's meetings", "my meetings", "meeting schedule"]):
             if "today" in rl:
                 steps.append({
                     "adapter": "outlook_native",
@@ -352,8 +352,10 @@ class UniversalOrchestrator:
 
         # "play music" / "play jazz" / "put on some music" — smart routing
         if any(kw in rl for kw in ["play music", "play some music", "put on music", "play a song",
-                                     "play songs", "play something", "play jazz", "play rock",
-                                     "play hip hop", "play classical", "play movies", "play a movie"]):
+                                     "play songs", "play something", "play jazz", "play some jazz",
+                                     "play jazz music", "play some jazz music", "play rock",
+                                     "play hip hop", "play classical", "play movies", "play a movie",
+                                     "play country", "play pop", "play metal", "play lofi", "play lo-fi"]):
             # Extract what to play
             query = "music"
             for kw in ["play ", "put on "]:
@@ -748,8 +750,9 @@ class UniversalOrchestrator:
         # TEAMS DEEP AUTOMATION                                             #
         # ================================================================ #
 
-        if "teams" in rl:
-            if any(kw in rl for kw in ["join meeting", "join teams meeting", "start meeting", "teams meeting"]):
+        if "teams" in rl or "standup" in rl:
+            # "on teams" or "standup" = Teams-specific action
+            if any(kw in rl for kw in ["join meeting", "join a meeting", "join the meeting", "join teams meeting", "start meeting", "teams meeting", "join standup", "join call", "on teams", "standup"]):
                 meeting = self._extract_meeting_name(request)
                 steps.append({
                     "adapter": "windows_app",
@@ -1308,9 +1311,19 @@ class UniversalOrchestrator:
 
     def _extract_playlist_name(self, request: str) -> str:
         """Extract playlist name from request."""
+        rl = request.lower()
+        # "play playlist Workout", "my playlist Workout", "open playlist Workout"
         for prefix in ["playlist ", "play playlist ", "my playlist ", "open playlist "]:
-            if prefix in request.lower():
-                return request.lower().split(prefix)[1].strip().rstrip("?.,!")
+            if prefix in rl:
+                return rl.split(prefix)[1].strip().rstrip("?.,!")
+        # "play Workout playlist" — strip trailing "playlist"
+        for prefix in ["play ", "put on "]:
+            if prefix in rl:
+                rest = rl.split(prefix)[1].strip().rstrip("?.,!")
+                if rest.endswith(" playlist"):
+                    return rest[:-10].strip()
+                if rest.endswith(" playlists"):
+                    return rest[:-10].strip()
         return ""
 
     def _extract_song_name(self, request: str) -> str:

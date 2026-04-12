@@ -346,191 +346,45 @@ def _arp(freqs: list[float], rate: float, duration: float, wave_func: Callable, 
 
 # ── Main Music Generator ────────────────────────────────────────────────────────
 
-def _generate_ultimate_startup(duration: float = 10.0) -> list[float]:
+def _generate_ultimate_startup(duration: float = 3.5) -> list[float]:
     """
-    Ultimate cyberpunk startup music - multi-layered masterpiece.
+    JARVIS-inspired startup sound — clean electronic beeps, no music.
+    Three rising tones: C5 → E5 → G5, like a proper AI assistant.
     """
     n = int(SAMPLE_RATE * duration)
     samples = [0.0] * n
 
-    # ═══════════════════════════════════════════════════════════
-    # LAYER 1: SUB BASS FOUNDATION (0-3s)
-    # Deep, rumbling bass that you FEEL
-    # ═══════════════════════════════════════════════════════════
-    bass_notes = [
-        (32.70, 0.0, 0.8),    # C1 - deep sub
-        (41.20, 0.8, 1.6),    # D1
-        (36.71, 1.6, 2.4),    # F#1
-        (49.00, 2.4, 3.2),    # G1
+    # JARVIS startup beeps: clean sine tones, no effects
+    beep_sequence = [
+        (523.25, 0.10, 0.25),   # C5 — attention
+        (659.25, 0.35, 0.50),   # E5 — rising
+        (783.99, 0.60, 0.80),   # G5 — confirmation
+        (1046.50, 1.00, 1.20), # C6 — online confirmation
     ]
 
-    for freq, start, end in bass_notes:
-        wave = _sine(freq, end - start, 0.5)
-        wave = _adsr(wave, 0.1, 0.2, 0.8, 0.3)
+    for freq, start, end in beep_sequence:
+        wave = _sine(freq, end - start, 0.4)
+        wave = _adsr(wave, attack=0.005, decay=0.02, sustain=0.7, release=0.05)
         start_s = int(SAMPLE_RATE * start)
         for i in range(len(wave)):
             if start_s + i < n:
                 samples[start_s + i] += wave[i]
 
-    # Add harmonic overtones to bass
-    for freq, start, end in bass_notes:
-        wave = _sine(freq * 2, end - start, 0.15)
-        wave = _adsr(wave, 0.1, 0.2, 0.6, 0.3)
-        start_s = int(SAMPLE_RATE * start)
-        for i in range(len(wave)):
-            if start_s + i < n:
-                samples[start_s + i] += wave[i]
+    # Sub bass confirmation — you feel it
+    bass = _sine(65.41, 0.5, 0.15)  # C2
+    bass = _adsr(bass, 0.01, 0.05, 0.5, 0.3)
+    bass_start = int(SAMPLE_RATE * 1.1)
+    for i in range(len(bass)):
+        if bass_start + i < n:
+            samples[bass_start + i] += bass[i]
 
-    # ═══════════════════════════════════════════════════════════
-    # LAYER 2: ANALOG SYNTH PAD (2-6s)
-    # Fat, warm supersaw chords
-    # ═══════════════════════════════════════════════════════════
-    chord_progression = [
-        [130.81, 164.81, 196.00],  # C3, E3, G3 - Cmaj
-        [146.83, 174.61, 220.00], # D3, F3, A3 - Dm
-        [164.81, 196.00, 246.94], # E3, G3, B3 - Em
-        [174.61, 220.00, 261.63], # F3, A3, C4 - Fmaj
-    ]
-
-    for i, chord in enumerate(chord_progression):
-        start = 2.0 + i * 1.0
-        end = start + 1.5
-        if end > duration:
-            break
-
-        for freq in chord:
-            # Main supersaw
-            wave = _supersaw(freq, end - start, num_voices=5, amp=0.15)
-            wave = _adsr(wave, 0.2, 0.3, 0.6, 0.4)
-            start_s = int(SAMPLE_RATE * start)
-            for j in range(len(wave)):
-                if start_s + j < n:
-                    samples[start_s + j] += wave[j]
-
-            # FM layer for brightness
-            fm_wave = _fm_synth(freq, end - start, mod_ratio=3.5, mod_index=2.0, amp=0.08)
-            fm_wave = _adsr(fm_wave, 0.3, 0.4, 0.5, 0.3)
-            for j in range(len(fm_wave)):
-                if start_s + j < n:
-                    samples[start_s + j] += fm_wave[j]
-
-    # ═══════════════════════════════════════════════════════════
-    # LAYER 3: ARPEGGIO (3-7s)
-    # Fast, glitchy arpeggios - very cyberpunk
-    # ═══════════════════════════════════════════════════════════
-    arp_freqs = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63]  # C4, E4, G4, C5, G4, E4
-    arp = _arp(arp_freqs, rate=8.0, duration=4.0, wave_func=lambda f, d, a: _square(f, d, a, 0.3), amp=0.12)
-    arp = _bitcrush(arp, bits=10)  # Digital crunch
-    arp = _fade_exp(arp, 0.1, 0.2)
-
-    start_s = int(SAMPLE_RATE * 3.0)
-    for i in range(len(arp)):
-        if start_s + i < n:
-            samples[start_s + i] += arp[i]
-
-    # Second arp layer - higher octave, different timing
-    arp_freqs2 = [523.25, 659.25, 783.99, 1046.50, 783.99, 659.25]
-    arp2 = _arp(arp_freqs2, rate=6.0, duration=3.5, wave_func=lambda f, d, a: _sawtooth(f, d, a), amp=0.08)
-    arp2 = _lowpass(arp2, 2000)
-    arp2 = _fade_exp(arp2, 0.1, 0.3)
-
-    start_s = int(SAMPLE_RATE * 3.5)
-    for i in range(len(arp2)):
-        if start_s + i < n:
-            samples[start_s + i] += arp2[i]
-
-    # ═══════════════════════════════════════════════════════════
-    # LAYER 4: LEAD MELODY (5-9s)
-    # Heroic lead synth - the main hook
-    # ═══════════════════════════════════════════════════════════
-    melody_notes = [
-        (392.00, 5.0, 5.5),    # G4
-        (440.00, 5.5, 6.0),    # A4
-        (493.88, 6.0, 6.5),    # B4
-        (523.25, 6.5, 7.5),   # C5 - long note
-        (587.33, 7.5, 8.0),   # D5
-        (523.25, 8.0, 8.5),   # C5
-        (440.00, 8.5, 9.0),   # A4
-        (392.00, 9.0, 9.5),   # G4
-    ]
-
-    for freq, start, end in melody_notes:
-        # Main lead - square wave with filter
-        lead = _square(freq, end - start, 0.2, 0.4)
-        lead = _lowpass(lead, 3000 + (end - start) * 1000)  # Sweeping filter
-        lead = _adsr(lead, 0.02, 0.1, 0.7, 0.2)
-
-        # FM layer for richness
-        fm_lead = _fm_synth(freq, end - start, mod_ratio=2.0, mod_index=1.5, amp=0.1)
-        fm_lead = _adsr(fm_lead, 0.03, 0.15, 0.6, 0.3)
-
-        start_s = int(SAMPLE_RATE * start)
-        for i in range(min(len(lead), n - start_s)):
-            samples[start_s + i] += lead[i] + fm_lead[i]
-
-    # ═══════════════════════════════════════════════════════════
-    # LAYER 5: GLITCHES & TEXTURES (0-10s)
-    # Throughout the entire track for cyberpunk feel
-    # ═══════════════════════════════════════════════════════════
-    # Glitch bursts at specific points
-    glitch_times = [0.5, 1.5, 2.5, 4.0, 5.0, 6.5, 7.5, 8.5]
-    for t in glitch_times:
-        glitch = _generate_glitch_pattern(0.3, density=0.3)
-        glitch = _lowpass(glitch, 3000)
-        start_s = int(SAMPLE_RATE * t)
-        for i in range(len(glitch)):
-            if start_s + i < n:
-                samples[start_s + i] += glitch[i] * 0.15
-
-    # Ambient noise sweep
-    noise_sweep = _noise(duration, amp=0.02, color="pink")
-    noise_sweep = _lowpass(noise_sweep, 500)
-    noise_sweep = _fade_exp(noise_sweep, 2.0, 2.0)
-    for i in range(len(noise_sweep)):
-        if i < n:
-            samples[i] += noise_sweep[i]
-
-    # ═══════════════════════════════════════════════════════════
-    # LAYER 6: IMPACT & BUILDUP (6-7s, 9-10s)
-    # Tension builders and release
-    # ═══════════════════════════════════════════════════════════
-    # Impact at 7s mark
-    impact_start = int(SAMPLE_RATE * 6.8)
-    impact_duration = 0.4
-
-    # Sub impact
-    impact_wave = _sine(50, impact_duration, 0.4)
-    impact_wave = _fade_exp(impact_wave, 0.01, 0.3)
-    for i in range(len(impact_wave)):
-        if impact_start + i < n:
-            samples[impact_start + i] += impact_wave[i]
-
-    # Noise impact
-    noise_impact = _noise(impact_duration, 0.15)
-    noise_impact = _fade_exp(noise_impact, 0.01, 0.2)
-    for i in range(len(noise_impact)):
-        if impact_start + i < n:
-            samples[impact_start + i] += noise_impact[i]
-
-    # ═══════════════════════════════════════════════════════════
-    # MASTERING
-    # ═══════════════════════════════════════════════════════════
-    # Soft clip for warmth
-    samples = [math.tanh(s * 1.2) if abs(s) < 50 else float(max(-1.0, min(1.0, s))) for s in samples]
-
-    # Gentle compression
-    samples = _compressor(samples, threshold=0.6, ratio=2.0)
-
-    # Final normalize
-    samples = _normalize(samples, -2.0)
-
-    # Master fade out
-    samples = _fade_exp(samples, 0.0, 1.0)
-
+    # Clean fade out
+    samples = _fade(samples, fade_in=0.01, fade_out=0.3)
+    samples = _normalize(samples, target_db=-3.0)
     return samples
 
 
-def _generate_unlock_sound(duration: float = 2.5) -> list[float]:
+def _generate_unlock_sound(duration: float = 1.5) -> list[float]:
     """Quick unlock confirmation sound - digital blip."""
     n = int(SAMPLE_RATE * duration)
     samples = [0.0] * n

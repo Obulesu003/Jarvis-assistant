@@ -33,6 +33,16 @@ memory/conversations/
 memory/long_term.json
 memory/long_term_memory.json
 memory/schedules.json
+memory/sessions/
+memory/sessions.json
+
+# Session files (contain browser cookies/session tokens — DO NOT COMMIT)
+config/sessions/
+config/api_key_manager.py
+
+# Package lock (not needed for this project)
+package-lock.json
+pyproject.toml
 
 # Chroma vector DB
 memory/episodes/chroma.sqlite3

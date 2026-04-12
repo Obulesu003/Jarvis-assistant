@@ -9,6 +9,7 @@ Layer 4 — PROCEDURAL: How to do things (skill library)
 """
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -50,20 +51,23 @@ class JARVISMemory:
         self._initialized = False
 
     def initialize(self):
-        """Initialize memory layers. Call once at startup."""
+        """Initialize memory layers in a background thread (non-blocking startup)."""
         if self._initialized:
             return
 
-        try:
-            self._episodic = EpisodicMemory(str(self._persist_dir / "episodes"))
-            self._semantic = SemanticMemory(str(self._persist_dir / "semantic"))
-            self._procedural = ProceduralMemory(str(self._persist_dir / "procedural"))
-            self._initialized = True
-            logger.info("[Memory] All 4 layers initialized")
-        except Exception as e:
-            logger.error(f"[Memory] Initialization failed: {e}")
-            # Fallback: working memory only
-            self._initialized = True
+        def _init_layers():
+            try:
+                self._episodic = EpisodicMemory(str(self._persist_dir / "episodes"))
+                self._semantic = SemanticMemory(str(self._persist_dir / "semantic"))
+                self._procedural = ProceduralMemory(str(self._persist_dir / "procedural"))
+                self._initialized = True
+                logger.info("[Memory] All 4 layers initialized in background")
+            except Exception as e:
+                logger.error(f"[Memory] Initialization failed: {e}")
+                # Fallback: working memory only
+                self._initialized = True
+
+        threading.Thread(target=_init_layers, daemon=True, name="MemoryInit").start()
 
     # ── WORKING MEMORY ──
     def set(self, key: str, value: Any, ttl: int = 300) -> None:
