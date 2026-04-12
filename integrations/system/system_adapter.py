@@ -627,12 +627,12 @@ class SystemAutomationAdapter(BaseIntegrationAdapter):
                     continue
 
             if spotify_running and is_specific:
-                # Open Spotify search directly via spotify: URI
-                # This brings Spotify to foreground with the search pre-filled
-                spotify_search_uri = f"spotify:search:{query_clean}"
+                # Spotify is already running — use URL to open search page, then navigate
+                search_encoded = query_clean.replace(" ", "%20")
+                spotify_url = f"https://open.spotify.com/search/{search_encoded}"
                 try:
                     subprocess.Popen(
-                        ["powershell", "-Command", f'Start-Process "{spotify_search_uri}"'],
+                        ["powershell", "-Command", f'Start-Process "{spotify_url}"'],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )

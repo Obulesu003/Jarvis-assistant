@@ -350,6 +350,21 @@ class UniversalOrchestrator:
         # MEDIA CONTROL                                                    #
         # ================================================================ #
 
+        # "play <anything>" — catch-all for specific song/album requests (e.g. "play Shape of You")
+        # Must come BEFORE genre keywords so it fires for "play X" where X is a song name
+        if any(rl.startswith(prefix) for prefix in ["play ", "put on ", "listen to "]):
+            prefix = next(p for p in ["play ", "put on ", "listen to "] if rl.startswith(p))
+            rest = rl[len(prefix):].strip().strip("?.,!").strip()
+            # Don't route empty or very generic queries through here
+            if rest and rest not in ("music", "some music", "songs", "a song", "something"):
+                steps.append({
+                    "adapter": "system",
+                    "action": "play_music",
+                    "params": {"query": rest},
+                    "description": f"Play music: {rest}",
+                })
+                return steps
+
         # "play music" / "play jazz" / "put on some music" — smart routing
         if any(kw in rl for kw in ["play music", "play some music", "put on music", "play a song",
                                      "play songs", "play something", "play jazz", "play some jazz",

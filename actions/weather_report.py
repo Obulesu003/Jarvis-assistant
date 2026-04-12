@@ -196,13 +196,8 @@ def weather_action(
             _speak_and_log(spoken, player)
             return detailed
 
-    # Fallback: open browser search
-    search_query = f"weather in {city}" + (f" {time_param}" if time_param else "")
-    url = f"https://www.google.com/search?q={quote_plus(search_query)}"
-    with contextlib.suppress(Exception):
-        webbrowser.open(url)
-
-    msg = f"Showing the weather for {city}, sir."
+    # No API key and wttr.in failed — just report failure without opening browser
+    msg = f"Weather data unavailable for {city}, sir."
     _speak_and_log(msg, player)
     return msg
 
