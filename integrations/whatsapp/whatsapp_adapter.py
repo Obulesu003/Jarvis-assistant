@@ -5,6 +5,7 @@ Controls web.whatsapp.com for messaging.
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from integrations.base.adapter import ActionResult, BaseIntegrationAdapter
@@ -71,11 +72,187 @@ class WhatsAppAdapter(BaseIntegrationAdapter):
         return [
             "send_message",
             "send_image",
+            "send_media",
             "search_chat",
             "get_chat_history",
+            "read_messages",
+            "search_messages",
             "mark_read",
             "get_status",
         ]
+
+    def _action_read_messages(self, contact: str = "", count: int = 10, **kwargs) -> ActionResult:
+        """Read recent messages from a WhatsApp chat using pywinauto."""
+        try:
+            from pywinauto import Application, findwindows
+            import ctypes
+
+            # Try to connect to WhatsApp desktop app
+            wa_window = None
+            try:
+                app = Application(backend="uia").connect(title_re="WhatsApp.*", timeout=3)
+                wa_window = app.window(title_re="WhatsApp.*")
+                wa_window.set_focus()
+            except Exception:
+                pass
+
+            if not wa_window:
+                # Fall back to web WhatsApp
+                return ActionResult(success=False, error="WhatsApp desktop not running. Using web WhatsApp instead.")
+
+            user32 = ctypes.windll.user32
+
+            # Search for contact
+            search_box = wa_window.child_window(auto_id="mainSearchBox", control_type="Edit")
+            if search_box.exists():
+                search_box.set_edit_text(contact)
+                time.sleep(1)
+                # Press Enter to open chat
+                user32.keybd_event(0x0D, 0, 0, 0)
+                user32.keybd_event(0x0D, 0, 0x0002, 0)
+                time.sleep(1)
+
+            # Try to read message bubbles
+            messages = []
+            try:
+                chat_area = wa_window.child_window(control_type="Document")
+                if chat_area.exists():
+                    # Get all text from chat area
+                    all_text = chat_area.window_text()
+                    if all_text:
+                        # Split by newlines and take recent ones
+                        lines = [l.strip() for l in all_text.split("\n") if l.strip()]
+                        messages = lines[-count:] if len(lines) > count else lines
+            except Exception:
+                pass
+
+            if messages:
+                msg_text = "\n".join(messages)
+                return ActionResult(
+                    success=True,
+                    data={
+                        "contact": contact,
+                        "messages": messages,
+                        "count": len(messages),
+                        "spoken_message": f"Last messages from {contact}: {'. '.join(messages[:3])}",
+                    }
+                )
+            return ActionResult(success=True, data={"contact": contact, "messages": [], "spoken_message": f"No messages found from {contact}"})
+
+        except ImportError:
+            return ActionResult(success=False, error="pywinauto not installed. Run: pip install pywinauto")
+        except Exception as e:
+            logger.warning(f"[WhatsApp] read_messages failed: {e}")
+            return ActionResult(success=False, error=str(e))
+
+    def _action_search_messages(self, query: str = "", **kwargs) -> ActionResult:
+        """Search within WhatsApp messages."""
+        try:
+            from pywinauto import Application
+            import ctypes
+
+            try:
+                app = Application(backend="uia").connect(title_re="WhatsApp.*", timeout=3)
+                wa_window = app.window(title_re="WhatsApp.*")
+                wa_window.set_focus()
+            except Exception:
+                return ActionResult(success=False, error="WhatsApp desktop not running")
+
+            user32 = ctypes.windll.user32
+
+            # Click search icon (Ctrl+F in WhatsApp desktop)
+            user32.keybd_event(0x11, 0, 0, 0)  # Ctrl
+            user32.keybd_event(0x46, 0, 0, 0)    # F
+            user32.keybd_event(0x46, 0, 0x0002, 0)
+            user32.keybd_event(0x11, 0, 0x0002, 0)
+            time.sleep(0.5)
+
+            # Type search query
+            search_edit = wa_window.child_window(auto_id="searchInput", control_type="Edit")
+            if search_edit.exists():
+                search_edit.set_edit_text(query)
+                time.sleep(1)
+
+            return ActionResult(success=True, data={"query": query, "spoken_message": f"Searching WhatsApp for: {query}"})
+
+        except ImportError:
+            return ActionResult(success=False, error="pywinauto not installed")
+        except Exception as e:
+            logger.warning(f"[WhatsApp] search_messages failed: {e}")
+            return ActionResult(success=False, error=str(e))
+
+    def _action_send_media(self, contact: str = "", file_path: str = "", caption: str = "", **kwargs) -> ActionResult:
+        """Send a media file (image/video) to a WhatsApp contact."""
+        try:
+            from pywinauto import Application
+            import ctypes
+            import subprocess
+
+            if not contact or not file_path:
+                return ActionResult(success=False, error="Specify contact and file_path")
+
+            # Verify file exists
+            if not Path(file_path).exists():
+                return ActionResult(success=False, error=f"File not found: {file_path}")
+
+            try:
+                app = Application(backend="uia").connect(title_re="WhatsApp.*", timeout=3)
+                wa_window = app.window(title_re="WhatsApp.*")
+                wa_window.set_focus()
+            except Exception:
+                return ActionResult(success=False, error="WhatsApp desktop not running")
+
+            user32 = ctypes.windll.user32
+
+            # Search for contact
+            search_box = wa_window.child_window(auto_id="mainSearchBox", control_type="Edit")
+            if search_box.exists():
+                search_box.set_edit_text(contact)
+                time.sleep(1)
+                user32.keybd_event(0x0D, 0, 0, 0)
+                user32.keybd_event(0x0D, 0, 0x0002, 0)
+                time.sleep(1)
+
+            # Click attach button (paperclip icon)
+            try:
+                attach_btn = wa_window.child_window(title="Attach", control_type="Button")
+                if not attach_btn.exists():
+                    attach_btn = wa_window.child_window(auto_id="attachDocBtn", control_type="Button")
+                if attach_btn.exists():
+                    attach_btn.click()
+                    time.sleep(1)
+                    # Type file path into the file dialog
+                    file_input = wa_window.child_window(control_type="Edit")
+                    if file_input.exists():
+                        file_input.set_edit_text(str(Path(file_path).resolve()))
+                        time.sleep(0.5)
+                        user32.keybd_event(0x0D, 0, 0, 0)  # Open
+                        user32.keybd_event(0x0D, 0, 0x0002, 0)
+                        time.sleep(2)
+
+                        # Send (Enter or click send button)
+                        if caption:
+                            msg_box = wa_window.child_window(control_type="Edit")
+                            if msg_box.exists():
+                                msg_box.set_edit_text(caption)
+                                time.sleep(0.5)
+
+                        send_btn = wa_window.child_window(title="Send", control_type="Button")
+                        if send_btn.exists():
+                            send_btn.click()
+                        else:
+                            user32.keybd_event(0x0D, 0, 0, 0)
+                            user32.keybd_event(0x0D, 0, 0x0002, 0)
+            except Exception as e:
+                return ActionResult(success=False, error=f"Attachment UI interaction failed: {e}")
+
+            return ActionResult(success=True, data={"contact": contact, "file": Path(file_path).name, "spoken_message": f"Sent {Path(file_path).name} to {contact}"})
+
+        except ImportError:
+            return ActionResult(success=False, error="pywinauto not installed. Run: pip install pywinauto")
+        except Exception as e:
+            logger.warning(f"[WhatsApp] send_media failed: {e}")
+            return ActionResult(success=False, error=str(e))
 
     async def _get_page(self):
         """Get WhatsApp page, restoring session if needed."""
