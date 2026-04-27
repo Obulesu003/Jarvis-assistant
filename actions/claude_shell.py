@@ -15,9 +15,8 @@ Usage:
   shell_interrupt → sends Ctrl+C to break current action
   shell_end    → terminates the Claude Code process
 """
-import logging  # migrated from print()
 from __future__ import annotations
-
+import logging  # migrated from print()
 import os
 import re
 import signal

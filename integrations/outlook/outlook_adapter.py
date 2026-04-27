@@ -644,7 +644,7 @@ class OutlookAdapter(BaseIntegrationAdapter):
         except Exception as e:
             raise ServiceError(self.SERVICE_NAME, f"Could not save event: {e}")
 
-    def _action_update_event(self, event_id: str, updates: dict, **kwargs) -> ActionResult:
+    async def _action_update_event(self, event_id: str, updates: dict, **kwargs) -> ActionResult:
         """Update a calendar event."""
         try:
             await self._init_page()
@@ -674,10 +674,10 @@ class OutlookAdapter(BaseIntegrationAdapter):
         except Exception as e:
             return ActionResult(success=False, error=f"Could not update event: {e}")
 
-    def _action_delete_event(self, event_id: str, **kwargs) -> ActionResult:
+    async def _action_delete_event(self, event_id: str, **kwargs) -> ActionResult:
         """Delete a calendar event."""
         try:
-            asyncio.get_event_loop().run_until_complete(self._init_page())
+            await self._init_page()
             page = self._page
 
             await page.goto(f"https://outlook.office.com/calendar/item/{event_id}")
@@ -691,10 +691,10 @@ class OutlookAdapter(BaseIntegrationAdapter):
         except Exception as e:
             return ActionResult(success=False, error=f"Could not delete event: {e}")
 
-    def _action_find_meeting_time(self, attendees: list | None = None, duration: int = 60, **kwargs) -> ActionResult:
+    async def _action_find_meeting_time(self, attendees: list | None = None, duration: int = 60, **kwargs) -> ActionResult:
         """Find available meeting times."""
         try:
-            asyncio.get_event_loop().run_until_complete(self._init_page())
+            await self._init_page()
             page = self._page
 
             await page.goto("https://outlook.office.com/calendar/findmeetingtimes")

@@ -9,9 +9,8 @@ Usage: When the user asks to:
 This tool runs the `claude` CLI with --print flag for non-interactive output,
 pipes the request as a prompt, and returns the result for TTS.
 """
-import logging  # migrated from print()
 from __future__ import annotations
-
+import logging  # migrated from print()
 import json
 import re
 import subprocess
