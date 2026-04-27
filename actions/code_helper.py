@@ -257,7 +257,7 @@ def _build(description, language, output_path, args, timeout, speak=None, player
 
     try:
         code, path = _write(description, lang, output_path, player)
-        logging.getLogger("Code").debug('Written: {path}')
+        logging.getLogger("Code").debug(f'Written: {path}')
     except Exception as e:
         msg = f"Could not write initial code: {e}"
         if speak: speak(msg)
@@ -265,7 +265,7 @@ def _build(description, language, output_path, args, timeout, speak=None, player
 
     last_output = ""
     for attempt in range(1, MAX_BUILD_ATTEMPTS + 1):
-        logging.getLogger("Code").info('🔄 Attempt {attempt}/{MAX_BUILD_ATTEMPTS}')
+        logging.getLogger("Code").info(f'🔄 Attempt {attempt}/{MAX_BUILD_ATTEMPTS}')
         if player:
             player.write_log(f"[Code] Attempt {attempt}...")
 
@@ -280,7 +280,7 @@ def _build(description, language, output_path, args, timeout, speak=None, player
             if speak: speak(msg)
             return f"{msg}\n\nOutput:\n{last_output}"
 
-        logging.getLogger("Code").warning('️ Error on attempt {attempt}, fixing...')
+        logging.getLogger("Code").warning(f'️ Error on attempt {attempt}, fixing...')
         if player:
             player.write_log(f"[Code] Fixing (attempt {attempt})...")
 
@@ -306,7 +306,7 @@ def _write_action(description, language, output_path, player) -> str:
         player.write_log("[Code] Writing code...")
     try:
         code, path = _write(description, language, output_path, player)
-        logging.getLogger("Code").debug('Written: {path}')
+        logging.getLogger("Code").debug(f'Written: {path}')
         return f"Code written. Saved to: {path}\n\nPreview:\n{_preview(code)}"
     except Exception as e:
         return f"Could not generate code: {e}"
@@ -344,7 +344,7 @@ Updated code:"""
         return f"Could not edit code: {e}"
 
     status = _save_file(Path(file_path), edited)
-    logging.getLogger("Code").debug('Edited: {file_path}')
+    logging.getLogger("Code").debug(f'Edited: {file_path}')
     return f"File edited. {status}\n\nPreview:\n{_preview(edited)}"
 
 
@@ -426,7 +426,7 @@ Optimized code:"""
     save_path = Path(file_path) if file_path else _resolve_save_path(output_path, lang)
 
     status = _save_file(save_path, optimized)
-    logging.getLogger("Code").debug('Optimized: {save_path}')
+    logging.getLogger("Code").debug(f'Optimized: {save_path}')
 
     original_lines  = len(code.splitlines())
     optimized_lines = len(optimized.splitlines())
@@ -457,7 +457,7 @@ def _screen_debug_action(description, file_path, player, speak=None) -> str:
     if file_path:
         file_content, err = _read_file(file_path)
         if err:
-            logging.getLogger("Code").warning('️ Could not read file: {err}')
+            logging.getLogger("Code").warning(f'️ Could not read file: {err}')
 
     try:
         from google import genai
@@ -510,7 +510,7 @@ Be specific and actionable. If you see an error message, quote it exactly."""
                 save_path  = Path(file_path)
                 _save_file(save_path, fixed_code)
                 analysis += f"\n\n[OK] Fixed code has been saved to: {file_path}"
-                logging.getLogger("Code").debug('Fixed code saved: {file_path}')
+                logging.getLogger("Code").debug(f'Fixed code saved: {file_path}')
 
         return analysis
 
@@ -553,7 +553,7 @@ def code_helper(
 
     if action == "auto":
         action = _detect_intent(description, file_path, code)
-        logging.getLogger("Code").info('🤖 Auto-detected: {action}')
+        logging.getLogger("Code").info(f'🤖 Auto-detected: {action}')
 
     if action == "write":
         return _write_action(description, language, output_path, player)

@@ -307,16 +307,22 @@ def _send_session_command(session_id: str, command: str, timeout: int = 30) -> s
         time.sleep(1.5)  # Allow output to buffer
 
         # Read available output
-        import select
+        import msvcrt
         lines = []
         while True:
-            ready, _, _ = select.select([proc.stdout], [], [], 0.5)
-            if not ready:
+            char = msvcrt.kbhit()
+            if not char:
+                time.sleep(0.1)
+                if len(lines) > 0 and time.time() - start_time > 0.5:
+                    break
+                continue
+            ch = msvcrt.getch()
+            if ch in (b'\r', b'\n'):
                 break
-            line = proc.stdout.readline()
-            if not line:
-                break
-            lines.append(line.rstrip())
+            if ch == b'\x03':
+                raise KeyboardInterrupt
+            lines.append(ch)
+        return b''.join(lines).decode('utf-8', errors='replace')
 
         output = "\n".join(lines)
         entry["last_used"] = time.time()

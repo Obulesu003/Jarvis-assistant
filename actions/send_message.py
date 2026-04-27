@@ -427,7 +427,7 @@ def send_message(
     if not message_text:
         return "Please specify what message to send, sir."
 
-    logging.getLogger("SendMessage").info('📨 {platform} -> {receiver}: {message_text[:40]}')
+    logging.getLogger("SendMessage").info(f'📨 {platform} -> {receiver}: {message_text[:40]}')
     if player:
         player.write_log(f"[msg] Sending to {receiver} via {platform}...")
 
@@ -435,34 +435,34 @@ def send_message(
     if _PLAYWRIGHT_OK and platform in ("whatsapp", "wp", "wapp"):
         try:
             result = asyncio.run(_send_whatsapp_web(receiver, message_text, player))
-            logging.getLogger("SendMessage").debug('{result}')
+            logging.getLogger("SendMessage").debug(f'{result}')
             if player:
                 player.write_log(f"[msg] {result}")
             return result
         except Exception as e:
-            logging.getLogger("SendMessage").warning('️ WhatsApp Web failed: {e}, trying desktop...')
+            logging.getLogger("SendMessage").warning(f'️ WhatsApp Web failed: {e}, trying desktop...')
             return _send_via_desktop_app("WhatsApp", receiver, message_text, player)
 
     elif _PLAYWRIGHT_OK and platform in ("telegram", "tg"):
         try:
             result = asyncio.run(_send_telegram_web(receiver, message_text, player))
-            logging.getLogger("SendMessage").debug('{result}')
+            logging.getLogger("SendMessage").debug(f'{result}')
             if player:
                 player.write_log(f"[msg] {result}")
             return result
         except Exception as e:
-            logging.getLogger("SendMessage").warning('️ Telegram Web failed: {e}, trying desktop...')
+            logging.getLogger("SendMessage").warning(f'️ Telegram Web failed: {e}, trying desktop...')
             return _send_via_desktop_app("Telegram", receiver, message_text, player)
 
     elif _PLAYWRIGHT_OK and platform in ("instagram", "ig", "insta"):
         try:
             result = asyncio.run(_send_instagram_dm(receiver, message_text, player))
-            logging.getLogger("SendMessage").debug('{result}')
+            logging.getLogger("SendMessage").debug(f'{result}')
             if player:
                 player.write_log(f"[msg] {result}")
             return result
         except Exception as e:
-            logging.getLogger("SendMessage").warning('️ Instagram DM failed: {e}')
+            logging.getLogger("SendMessage").warning(f'️ Instagram DM failed: {e}')
             return f"Instagram DM error: {e}"
 
     # Fallback: PyAutoGUI desktop app
@@ -476,7 +476,7 @@ def send_message(
     }
     app_name = app_map.get(platform, platform.title())
     result = _send_via_desktop_app(app_name, receiver, message_text, player)
-    logging.getLogger("SendMessage").debug('{result}')
+    logging.getLogger("SendMessage").debug(f'{result}')
     if player:
         player.write_log(f"[msg] {result}")
     return result

@@ -97,7 +97,7 @@ class TaskScheduler:
                     )
                     self._schedules[sched.id] = sched
                     self._compute_next_run(sched)
-            logging.getLogger("Scheduler").info('Loaded {len(self._schedules)} schedules')
+            logging.getLogger("Scheduler").info(f'Loaded {len(self._schedules)} schedules')
         except Exception as e:
             logging.getLogger("Scheduler").info(f"Failed to load schedules: {e}")
 
@@ -154,7 +154,7 @@ class TaskScheduler:
         with self._lock:
             self._schedules[sched.id] = sched
         self.save_schedules()
-        logging.getLogger("Scheduler").info('Added: {sched.id} -- {goal} (next: {self._fmt_time(sched.next_run)})')
+        logging.getLogger("Scheduler").info(f'Added: {sched.id} -- {goal} (next: {self._fmt_time(sched.next_run)})')
         return sched.id
 
     def remove_schedule(self, schedule_id: str) -> bool:

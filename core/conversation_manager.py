@@ -215,7 +215,7 @@ class ConversationManager:
                     ],
                 }, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            logging.getLogger("ConversationManager").info('Could not save conversation: {e}')
+            logging.getLogger("ConversationManager").info(f'Could not save conversation: {e}')
 
     def clear(self):
         """Clears the conversation buffer."""
@@ -243,7 +243,7 @@ def _gemini_summarize(prompt: str) -> str:
         )
         return response.text.strip()
     except Exception as e:
-        logging.getLogger("ConversationManager").info('Gemini summarize failed: {e}')
+        logging.getLogger("ConversationManager").info(f'Gemini summarize failed: {e}')
         return _simple_summarize(prompt)
 
 

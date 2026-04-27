@@ -47,8 +47,8 @@ def _draw_j_monogram(size: int, style: str = "default") -> Image.Image:
         stem_x = cx + size * 0.08
         # Vertical stem
         draw.rectangle(
-            [stem_x - stem_w/2, cy - size * 0.25,
-             stem_x + stem_w/2, cy + size * 0.25],
+            [int(stem_x - stem_w/2), int(cy - size * 0.25),
+             int(stem_x + stem_w/2), int(cy + size * 0.25)],
             fill=BRAND_CYAN
         )
         # Bottom curve (thick arc)

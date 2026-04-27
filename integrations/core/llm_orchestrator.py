@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 # 30-second timeout per request — prevents hangs when API is slow
 REQUEST_TIMEOUT = 30
 
-# Gemini free tier: 5 requests/minute → retry with backoff
-MAX_RETRIES = 2
-INITIAL_BACKOFF = 3  # seconds (reduced from 8 — faster retry for local usage)
+# Gemini free tier: 5 requests/minute → fail fast on rate limit
+MAX_RETRIES = 1  # Only one retry to avoid stacking delays when rate-limited
+INITIAL_BACKOFF = 0.5  # seconds
 
 # How many recent steps to include as context
 CONTEXT_HISTORY_LIMIT = 5
@@ -53,12 +53,12 @@ class LLMOrchestrator:
 
     def __init__(self, universal_orchestrator: Any, gemini_key: str | None = None):
         self._orch = universal_orchestrator
+        self._gemini_key_cache: str | None = None  # Cache decrypted key (must be before _get_gemini_key)
         self._gemini_key = gemini_key or self._get_gemini_key()
         self._model = None  # Lazily initialized
         self._client = None  # Lazily initialized for google.genai Client
         self._memory_bridge = None  # Lazily initialized
         self._pattern_learner = None  # Lazily initialized
-        self._gemini_key_cache: str | None = None  # Cache decrypted key
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -75,15 +75,13 @@ class LLMOrchestrator:
         context = context or {}
         logger.info("[LLMOrchestrator] Request: %s", user_request[:100])
 
-        # ── Fast path: keyword router (no API latency) ─────────────────────
+        # ── Fast path: keyword router (near-instant, no API call) ──────────
         steps = self._orch._plan_steps(user_request, user_request.lower(), context)
         if steps:
             results = self._execute_steps(steps)
-            # Format response — try LLM for natural speech, fall back to simple format
-            try:
-                return self._format_response_llm(user_request, steps, results)
-            except Exception:
-                return self._format_response_fallback(steps, results)
+            # Skip LLM response formatting — preserves Gemini rate limit (5/min).
+            # Only use LLM formatting for complex smart-path requests.
+            return self._format_response_fallback(steps, results, user_request)
 
         # ── Smart path: LLM combined (planning + response in one call) ───
         return self.execute_combined(user_request, context)
@@ -329,12 +327,12 @@ class LLMOrchestrator:
         results_summary = self._build_results_summary(results)
         if self._is_simple_result_type(results):
             # Skip expensive LLM call for simple results
-            return self._format_response_fallback(steps, results)
+            return self._format_response_fallback(steps, results, request)
 
         try:
             client = self._get_client()
         except Exception:
-            return self._format_response_fallback(steps, results)
+            return self._format_response_fallback(steps, results, request)
 
         prompt = RESPONSE_PROMPT.format(
             request=request,
@@ -365,7 +363,7 @@ class LLMOrchestrator:
                 logger.warning("[LLMOrchestrator] Response formatting failed: %s", e)
                 break
 
-        return self._format_response_fallback(steps, results)
+        return self._format_response_fallback(steps, results, request)
 
     def _is_simple_result_type(self, results: list[Any]) -> bool:
         """Check if results are simple types that don't need LLM formatting."""
@@ -471,30 +469,31 @@ class LLMOrchestrator:
         return resolved
 
     def _resolve_value(self, value: str, results: list[Any]) -> str:
-        """Resolve a single substitution pattern in a string value.
+        """Resolve ALL substitution patterns in a string value.
 
         Supports ${steps[N].result.field} syntax.
-        Replaces only the matched substitution, preserving surrounding text.
+        Replaces all matched substitutions, preserving surrounding text.
         """
-        # Use double-backslash strings to produce the correct regex pattern:
-        # match: ${steps[N].result.field}
-        pattern = "\\$\\{steps\\[(\\d+)\\]\\.result\\.(\\w+)\\}"
-        match = re.search(pattern, value)
-        if not match:
-            return value
-        try:
-            step_idx = int(match.group(1))
-            field = match.group(2)
-            if 0 <= step_idx < len(results):
-                result = results[step_idx]
-                if isinstance(result, dict):
-                    field_value = result.get(field)
-                    if field_value is not None:
-                        # Replace only the matched substitution, not the whole string
-                        return value[:match.start()] + str(field_value) + value[match.end():]
-            return value
-        except (ValueError, IndexError):
-            return value
+        pattern = r"\$\{steps\[(\d+)\]\.result\.(\w+)\}"
+        while True:
+            match = re.search(pattern, value)
+            if not match:
+                break
+            try:
+                step_idx = int(match.group(1))
+                field = match.group(2)
+                if 0 <= step_idx < len(results):
+                    result = results[step_idx]
+                    if isinstance(result, dict):
+                        field_value = result.get(field)
+                        if field_value is not None:
+                            value = value[:match.start()] + str(field_value) + value[match.end():]
+                            continue
+                break
+            except (ValueError, IndexError):
+                break
+        return value
+
 
     AUTO_LAUNCH_MAP = {
         "whatsapp": "https://web.whatsapp.com",
@@ -675,37 +674,153 @@ class LLMOrchestrator:
     # ------------------------------------------------------------------ #
 
     def _format_response_fallback(
-        self, steps: list[dict], results: list[Any]
+        self, steps: list[dict], results: list[Any], request: str = ""
     ) -> str:
-        """Fallback response formatter when LLM is unavailable.
+        """Personality-driven fallback response formatter — no LLM calls.
 
-        Handles strings (from adapter.execute_action), dicts (ActionResult from
-        _execute_step), and StepResult objects (from UniversalOrchestrator.execute).
-        Uses smart summarization to avoid reading out long lists item by item.
+        Detects user language, uses spoken_message from results if available,
+        and adds JARVIS personality. Uses smart summarization for large lists.
         """
         if not results:
-            return "Done."
+            return self._jarvis_reply("Done.", request)
+
         first = results[0]
-        if isinstance(first, str):
-            # adapter.execute_action returns a human-readable string
-            parts = [str(r) for r in results]
-            return " | ".join(parts) if parts else "Done."
+
+        # Use spoken_message from result data if available (already formatted)
         if isinstance(first, dict):
-            # ActionResult dict from _execute_step: format each with summarization
+            for r in results:
+                if isinstance(r, dict) and r.get("success"):
+                    msg = r.get("data", {}).get("spoken_message") if isinstance(r.get("data"), dict) else None
+                    if msg:
+                        return self._jarvis_reply(msg, request)
+                    # Fall through to summarization
+                    formatted = self._summarize_result(r)
+                    if formatted:
+                        return self._jarvis_reply(formatted, request)
+            return self._jarvis_reply(self._summarize_results_list(results), request)
+
+        if isinstance(first, str):
+            parts = [str(r) for r in results if r and str(r) not in ("Done, sir.", "Done.")]
+            if not parts:
+                return self._jarvis_reply("Done.", request)
+            return self._jarvis_reply(" | ".join(parts), request)
+
+        if isinstance(first, ActionResult):
             summaries = []
             for r in results:
-                if isinstance(r, dict):
-                    if r.get("success") is False:
-                        summaries.append(f"Failed: {r.get('error', 'unknown error')}")
-                    else:
-                        formatted = self._summarize_result(r)
-                        if formatted:
-                            summaries.append(formatted)
+                if isinstance(r, ActionResult):
+                    text = str(r)
+                    if text not in ("Done, sir.", "Done."):
+                        summaries.append(text)
+            if not summaries:
+                return self._jarvis_reply("Done.", request)
+            return self._jarvis_reply(" | ".join(summaries), request)
+
+        return self._jarvis_reply("Done.", request)
+
+    def _jarvis_reply(self, message: str, request: str = "") -> str:
+        """Add JARVIS personality prefix based on detected language."""
+        lang = self._detect_language(request)
+        if lang == "hi":
+            return f"जी सर, {message}"
+        if lang == "ta":
+            return f"அவ்விதமாகத் தான் சார், {message}"
+        if lang == "te":
+            return f"అవును సార్, {message}"
+        if lang == "ml":
+            return f"അങ്ങനെ തന്നെ സർ, {message}"
+        if lang == "bn":
+            return f"হ্যাঁ স্যার, {message}"
+        if lang == "gu":
+            return f"જી સર, {message}"
+        if lang == "mr":
+            return f"जी सर, {message}"
+        if lang == "kn":
+            return f"ಹೌದು ಸಾರ್, {message}"
+        if lang == "pa":
+            return f"ਜੀ ਸਰ, {message}"
+        if lang == "ur":
+            return f"جی سر, {message}"
+        if lang == "ar":
+            return f"نعم سيدي، {message}"
+        if lang == "es":
+            return f"De acuerdo, señor. {message}"
+        if lang == "fr":
+            return f"Bien, Monsieur. {message}"
+        if lang == "de":
+            return f"Sehr gut, Sir. {message}"
+        if lang == "pt":
+            return f"Sim, senhor. {message}"
+        if lang == "zh":
+            return f"好的，先生。{message}"
+        if lang == "ja":
+            return f"了解しました、 sir。{message}"
+        if lang == "ko":
+            return f"네, 선생님. {message}"
+        if lang == "ru":
+            return f"Да, сэр. {message}"
+        # English: just return the message as-is (already formatted with JARVIS voice)
+        return message
+
+    def _detect_language(self, text: str) -> str:
+        """Detect language from text using script/character patterns."""
+        if not text:
+            return "en"
+        # Hindi — Devanagari script
+        if any("\u0900" <= c <= "\u097F" for c in text):
+            return "hi"
+        # Tamil
+        if any("\u0B80" <= c <= "\u0BFF" for c in text):
+            return "ta"
+        # Telugu
+        if any("\u0C00" <= c <= "\u0C7F" for c in text):
+            return "te"
+        # Malayalam
+        if any("\u0D00" <= c <= "\u0D7F" for c in text):
+            return "ml"
+        # Bengali
+        if any("\u0980" <= c <= "\u09FF" for c in text):
+            return "bn"
+        # Gujarati
+        if any("\u0A80" <= c <= "\u0AFF" for c in text):
+            return "gu"
+        # Marathi
+        if any("\u0900" <= c <= "\u097F" for c in text) and "mr" in text.lower()[:50]:
+            return "mr"
+        # Kannada
+        if any("\u0C80" <= c <= "\u0CFF" for c in text):
+            return "kn"
+        # Punjabi (Gurmukhi)
+        if any("\u0A00" <= c <= "\u0A7F" for c in text):
+            return "pa"
+        # Arabic
+        if any("\u0600" <= c <= "\u06FF" for c in text):
+            return "ar"
+        # Chinese
+        if any("\u4E00" <= c <= "\u9FFF" for c in text):
+            return "zh"
+        # Japanese (Hiragana + Katakana)
+        if any("\u3040" <= c <= "\u30FF" for c in text):
+            return "ja"
+        # Korean
+        if any("\uAC00" <= c <= "\uD7AF" for c in text) or any("\u1100" <= c <= "\u11FF" for c in text):
+            return "ko"
+        return "en"
+
+    def _summarize_results_list(self, results: list[Any]) -> str:
+        """Summarize multiple results into a single message."""
+        summaries = []
+        for r in results:
+            if isinstance(r, dict):
+                if r.get("success") is False:
+                    summaries.append(f"Failed: {r.get('error', 'unknown error')}")
                 else:
-                    summaries.append(str(r))
-            return " | ".join(summaries) if summaries else "Done."
-        # Assume StepResult objects — delegate to orchestrator
-        return self._orch._format_response("", steps, results)
+                    formatted = self._summarize_result(r)
+                    if formatted:
+                        summaries.append(formatted)
+            elif isinstance(r, str) and r:
+                summaries.append(str(r))
+        return " | ".join(summaries) if summaries else "Done."
 
     # ------------------------------------------------------------------ #
     # Smart Summarization                                                  #

@@ -249,7 +249,7 @@ def analyze_error(
 
     # For critical errors (permission), abort immediately
     if error_type == ErrorType.PERMISSION:
-        logging.getLogger("ErrorHandler").info('{error_type.value} error detected -- ABORT')
+        logging.getLogger("ErrorHandler").info(f'{error_type.value} error detected -- ABORT')
         return {
             "decision":      ErrorDecision.ABORT,
             "reason":        f"{error_type.value}: {error[:100]}",
@@ -260,7 +260,7 @@ def analyze_error(
 
     # For import errors, skip immediately
     if error_type == ErrorType.IMPORT:
-        logging.getLogger("ErrorHandler").info('{error_type.value} error detected -- SKIP')
+        logging.getLogger("ErrorHandler").info(f'{error_type.value} error detected -- SKIP')
         return {
             "decision":      ErrorDecision.SKIP,
             "reason":        f"{error_type.value}: {error[:100]}",
@@ -271,7 +271,7 @@ def analyze_error(
 
     # For not_found errors, replan immediately
     if error_type == ErrorType.NOT_FOUND:
-        logging.getLogger("ErrorHandler").info('{error_type.value} error detected -- REPLAN')
+        logging.getLogger("ErrorHandler").info(f'{error_type.value} error detected -- REPLAN')
         return {
             "decision":      ErrorDecision.REPLAN,
             "reason":        f"{error_type.value}: {error[:100]}",
@@ -325,7 +325,7 @@ Attempt number: {attempt}"""
         return result
 
     except Exception as e:
-        logging.getLogger("ErrorHandler").warning('Analysis failed: {e} -- defaulting to rule-based')
+        logging.getLogger("ErrorHandler").warning(f'Analysis failed: {e} -- defaulting to rule-based')
         return {
             "decision":       ErrorDecision.REPLAN,
             "reason":         str(e),

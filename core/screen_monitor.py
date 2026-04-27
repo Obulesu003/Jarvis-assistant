@@ -163,7 +163,7 @@ class ScreenIntelligence:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = os.path.join(path, f"screenshot_{ts}.png")
             monitor = sct.monitors[1]
-            sct.shot(output=out_path)
+            sct.shot(monitors=monitor, path=out_path)
             return out_path
         except Exception as e:
             logger.error(f"[Screen] Screenshot save failed: {e}")

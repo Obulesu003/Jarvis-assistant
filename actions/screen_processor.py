@@ -89,9 +89,9 @@ def _get_camera_index() -> int:
         cap.release()
         if ret and frame is not None and frame.mean() > 5:
             best_index = idx
-            logging.getLogger("Camera").debug('Camera found at index {idx} -- saving to config.')
+            logging.getLogger("Camera").debug(f'Camera found at index {idx} -- saving to config.')
             break
-        logging.getLogger("Camera").warning('️  Index {idx}: no valid frame.')
+        logging.getLogger("Camera").warning(f'️  Index {idx}: no valid frame.')
 
     try:
         cfg = {}
@@ -102,7 +102,7 @@ def _get_camera_index() -> int:
         cfg["camera_index"] = best_index
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)
-        logging.getLogger("Camera").info('💾 Camera index {best_index} saved to config.')
+        logging.getLogger("Camera").info(f'💾 Camera index {best_index} saved to config.')
     except Exception as e:
         logging.getLogger("Camera").warning(f"️  Could not save camera index: {e}")
 
@@ -216,7 +216,7 @@ class _LiveSession:
                         tg.create_task(self._recv_loop())
                         tg.create_task(self._play_loop())
             except Exception as e:
-                logging.getLogger("ScreenProcess").warning('️ Disconnected: {e} -- reconnecting...')
+                logging.getLogger("ScreenProcess").warning(f'️ Disconnected: {e} -- reconnecting...')
                 self._session = None
                 self._ready.clear()
                 await asyncio.sleep(2)
@@ -240,7 +240,7 @@ class _LiveSession:
                     )
                     logging.getLogger("ScreenProcess").debug('Image sent')
                 except Exception as e:
-                    logging.getLogger("ScreenProcess").warning('️ Send error: {e}')
+                    logging.getLogger("ScreenProcess").warning(f'️ Send error: {e}')
 
     async def _recv_loop(self):
         transcript_buf: list[str] = []
@@ -260,10 +260,10 @@ class _LiveSession:
                         full = re.sub(r'\s+', ' ', " ".join(transcript_buf)).strip()
                         if full:
                             self._player.write_log(f"Jarvis: {full}")
-                            logging.getLogger("ScreenProcess").info('💬 {full}')
+                            logging.getLogger("ScreenProcess").info(f'💬 {full}')
                     transcript_buf = []
         except Exception as e:
-            logging.getLogger("ScreenProcess").warning('️ Recv error: {e}')
+            logging.getLogger("ScreenProcess").warning(f'️ Recv error: {e}')
             transcript_buf = []
             await asyncio.sleep(0.3)
 
@@ -280,7 +280,7 @@ class _LiveSession:
                 chunk = await self._audio_in.get()
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
-            logging.getLogger("ScreenProcess").error('Play error: {e}')
+            logging.getLogger("ScreenProcess").error(f'Play error: {e}')
             raise
         finally:
             stream.stop()
@@ -326,7 +326,7 @@ def screen_process(
         return False
 
     angle = (parameters or {}).get("angle", "screen").lower().strip()
-    logging.getLogger("ScreenProcess").info('angle={angle!r}  text={user_text!r}')
+    logging.getLogger("ScreenProcess").info(f'angle={angle!r}  text={user_text!r}')
 
     _ensure_started(player=player)
 
@@ -341,10 +341,10 @@ def screen_process(
             logging.getLogger("ScreenProcess").info('🖥️ Screen captured')
     except Exception as e:
         traceback.print_exc()
-        logging.getLogger("ScreenProcess").error('Capture error: {e}')
+        logging.getLogger("ScreenProcess").error(f'Capture error: {e}')
         return False
 
-    logging.getLogger("ScreenProcess").info('📦 {len(image_bytes)} bytes -> sending')
+    logging.getLogger("ScreenProcess").info(f'📦 {len(image_bytes)} bytes -> sending')
     _live.analyze(image_bytes, mime_type, user_text)
     return True
 
@@ -353,7 +353,7 @@ def warmup_session(player=None):
     try:
         _ensure_started(player=player)
     except Exception as e:
-        logging.getLogger("ScreenProcess").warning('️ Warmup error: {e}')
+        logging.getLogger("ScreenProcess").warning(f'️ Warmup error: {e}')
 
 
 if __name__ == "__main__":

@@ -240,7 +240,8 @@ def _drag(x1: int, y1: int, x2: int, y2: int, duration: float = 0.5) -> str:
 def _clipboard_copy() -> str:
     """Gets current clipboard content."""
     if _PYPERCLIP:
-        return pyperclip.paste()
+        content = pyperclip.paste()
+        return content if content else "Clipboard empty"
     _hotkey("ctrl", "c")
     time.sleep(0.2)
     return "Copied to clipboard"
@@ -432,7 +433,7 @@ def computer_control(
     if player:
         player.write_log(f"[Computer] {action}")
 
-    logging.getLogger("ComputerControl").info('️ Action: {action}  Params: {parameters}')
+    logging.getLogger("ComputerControl").info(f'️ Action: {action}  Params: {parameters}')
 
     try:
         if action == "type":
@@ -546,7 +547,7 @@ def computer_control(
         if action == "random_data":
             data_type = parameters.get("type", "name")
             result    = generate_random_data(data_type)
-            logging.getLogger("ComputerControl").info('🎲 Random {data_type}: {result}')
+            logging.getLogger("ComputerControl").info(f'🎲 Random {data_type}: {result}')
             return result
 
         if action == "user_data":
@@ -555,11 +556,11 @@ def computer_control(
             value   = profile.get(field, "")
             if not value:
                 value = generate_random_data(field)
-                logging.getLogger("ComputerControl").warning('️ No user {field} in memory, using random: {value}')
+                logging.getLogger("ComputerControl").warning(f'️ No user {field} in memory, using random: {value}')
             return value
 
         return f"Unknown computer_control action: '{action}'"
 
     except Exception as e:
-        logging.getLogger("ComputerControl").error('Error: {e}')
+        logging.getLogger("ComputerControl").error(f'Error: {e}')
         return f"computer_control failed: {e}"

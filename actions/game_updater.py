@@ -177,7 +177,7 @@ def _click_first_profile_by_screenshot() -> bool:
         abs_x = wx + search_x1 + center_x_local
         abs_y = wy + search_y1 + center_y_local
 
-        logging.getLogger("GameUpdater").info('🎯 First profile avatar at ({abs_x}, {abs_y}) -- clicking')
+        logging.getLogger("GameUpdater").info(f'🎯 First profile avatar at ({abs_x}, {abs_y}) -- clicking')
         pyautogui.click(abs_x, abs_y)
         return True
 
@@ -363,12 +363,12 @@ def _search_steam_appid(game_name: str) -> tuple[str | None, str | None]:
 
     if name_lower in _KNOWN_APPIDS:
         app_id, canonical = _KNOWN_APPIDS[name_lower]
-        logging.getLogger("GameUpdater").info('📖 Known: {canonical} ({app_id})')
+        logging.getLogger("GameUpdater").info(f'📖 Known: {canonical} ({app_id})')
         return app_id, canonical
 
     for key, (app_id, canonical) in _KNOWN_APPIDS.items():
         if name_lower in key or key in name_lower:
-            logging.getLogger("GameUpdater").info('📖 Known partial: {canonical} ({app_id})')
+            logging.getLogger("GameUpdater").info(f'📖 Known partial: {canonical} ({app_id})')
             return app_id, canonical
 
     try:
@@ -381,10 +381,10 @@ def _search_steam_appid(game_name: str) -> tuple[str | None, str | None]:
             items = json.loads(resp.read().decode()).get("items", [])
         if items:
             best = items[0]
-            logging.getLogger("GameUpdater").info("🌐 Store API: {best['name']} ({best['id']})")
+            logging.getLogger("GameUpdater").info(f"🌐 Store API: {best['name']} ({best['id']})")
             return str(best["id"]), best["name"]
     except Exception as e:
-        logging.getLogger("GameUpdater").warning('️ AppID search failed: {e}')
+        logging.getLogger("GameUpdater").warning(f'️ AppID search failed: {e}')
 
     return None, None
 
@@ -412,7 +412,7 @@ def _select_drive_in_dialog(dialog, drive_letter: str) -> bool:
             for ctrl in dialog.descendants(control_type=control_type):
                 if target in ctrl.window_text().upper():
                     ctrl.click_input()
-                    logging.getLogger("GameUpdater").debug('Drive via {control_type}: {ctrl.window_text()}')
+                    logging.getLogger("GameUpdater").debug(f'Drive via {control_type}: {ctrl.window_text()}')
                     return True
         except Exception:
             continue
@@ -505,7 +505,7 @@ def _handle_install_dialog(game_name: str) -> str:
     except ImportError:
         return _handle_install_dialog_pyautogui(game_name, best_drive)
     except Exception as e:
-        logging.getLogger("GameUpdater").warning('️ pywinauto failed: {e}')
+        logging.getLogger("GameUpdater").warning(f'️ pywinauto failed: {e}')
         return _handle_install_dialog_pyautogui(game_name, best_drive)
 
 
@@ -582,7 +582,7 @@ def _install_steam_game(steam_path: Path, game_name: str | None = None, app_id: 
             return f"Could not find '{game_name}' on Steam. Try providing the AppID directly."
         app_id    = found_id
         game_name = found_name or game_name
-        logging.getLogger("GameUpdater").info('🔍 Installing: {game_name} (AppID: {app_id})')
+        logging.getLogger("GameUpdater").info(f'🔍 Installing: {game_name} (AppID: {app_id})')
 
     try:
         subprocess.Popen([str(steam_exe), f"steam://install/{app_id}"])
@@ -815,5 +815,5 @@ def game_updater(parameters: dict, player=None, speak=None) -> str:
 
 if __name__ == "__main__":
     if "--scheduled" in sys.argv:
-        logging.getLogger("GameUpdater").info("🕐 Scheduled run at {datetime.now().strftime('%H:%M')}")
-        logging.getLogger("GameUpdater").debug("{game_updater({'action': 'update', 'platform': 'both'})}")
+        logging.getLogger("GameUpdater").info(f"🕐 Scheduled run at {datetime.now().strftime('%H:%M')}")
+        logging.getLogger("GameUpdater").debug(f"{game_updater({'action': 'update', 'platform': 'both'})}")

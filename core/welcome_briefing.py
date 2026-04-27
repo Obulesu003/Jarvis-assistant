@@ -5,6 +5,7 @@ Delivers personalized, epic briefings when JARVIS starts or unlocks.
 
 import sys
 import time
+import random
 import threading
 import logging
 import json
@@ -74,32 +75,99 @@ class WelcomeBriefing:
             except Exception as e:
                 logger.error(f"[Briefing] Speak error: {e}")
 
+    def _get_user_name(self) -> str:
+        """Get user's name from memory — fall back to 'sir'."""
+        try:
+            memory_dir = Path(__file__).parent.parent / "memory"
+            lt_path = memory_dir / "long_term.json"
+            if lt_path.exists():
+                data = json.loads(lt_path.read_text())
+                for entry in data if isinstance(data, list) else []:
+                    if isinstance(entry, dict) and entry.get("key", "").lower() in ("name", "user_name", "username"):
+                        return entry.get("value", "Bobby")
+                # Also check for stored_value pattern
+                for entry in data if isinstance(data, list) else []:
+                    if isinstance(entry, dict):
+                        val = entry.get("stored_value") or entry.get("value") or ""
+                        if val and len(val) < 30 and val[0].isupper():
+                            return val
+        except Exception:
+            pass
+        return "Bobby"
+
     def generate_briefing(self) -> list[str]:
-        """Generate briefing items to be spoken."""
+        """Generate personalized greeting based on time, context, and user identity."""
         items = []
 
-        # Determine time of day
         hour = datetime.now().hour
+        minute = datetime.now().minute
+        day = datetime.now().strftime("%A")
         self._is_morning = 5 <= hour < 12
 
-        # Play clean JARVIS startup beeps FIRST - the "wow moment"
+        # Play startup sound — the moment JARVIS comes alive
         _play_music("startup")
 
-        # JARVIS-style greeting - short, crisp, no fluff
+        name = self._get_user_name()
+        time_str = datetime.now().strftime("%I:%M %p")
+
+        # ── First start / fresh boot ──────────────────────────────────────────
         if self._is_first_start:
+            boot_lines = [
+                f"Good morning, {name}. It's {time_str}. All systems online.",
+                f"{name}, I'm online. Welcome back to MARK-XXXV.",
+                f"Initialized, {name}. Running at {time_str}. All systems nominal.",
+                f"Systems online. Ready when you are, {name}.",
+            ]
             if self._is_morning:
-                items.append("Good morning, Bobby. All systems online.")
+                items.append(
+                    f"Good morning, {name}. {day}, {time_str}. "
+                    f"JARVIS is fully operational. What would you like to start with?"
+                )
+            elif 12 <= hour < 17:
+                items.append(
+                    f"Afternoon, {name}. {time_str}. "
+                    f"JARVIS online and standing by. How can I help you today?"
+                )
+            elif 17 <= hour < 21:
+                items.append(
+                    f"Good evening, {name}. {time_str}. "
+                    f"Systems at full readiness. What shall we accomplish this evening?"
+                )
             else:
-                items.append("JARVIS online, Bobby. Systems nominal.")
+                items.append(
+                    f"Nice to see you, {name}. It's {time_str}. "
+                    f"Burning the midnight oil? JARVIS is here with you."
+                )
+        # ── Returning after unlock ─────────────────────────────────────────────
         else:
             if self._is_morning:
-                items.append("Good morning. Welcome back, sir.")
+                welcome_options = [
+                    f"Good morning, {name}. {day}, {time_str}.",
+                    f"Welcome back, {name}. It's {time_str} — ready to work.",
+                    f"Morning, {name}. {time_str} sharp. All systems confirmed.",
+                ]
             elif 12 <= hour < 17:
-                items.append("Good afternoon, Bobby.")
+                welcome_options = [
+                    f"Afternoon, {name}. {time_str}.",
+                    f"Back again, {name}. {time_str}. How's your day going?",
+                    f"Good to see you, {name}. It's {time_str}.",
+                ]
             elif 17 <= hour < 21:
-                items.append("Good evening, Bobby.")
+                welcome_options = [
+                    f"Good evening, {name}. {time_str}.",
+                    f"Evening, {name}. {time_str}. Ready to wrap up the day?",
+                    f"Welcome back, {name}. It's {time_str}. What's on your mind?",
+                ]
             else:
-                items.append("Working late, Bobby?")
+                welcome_options = [
+                    f"Working late, {name}? It's {time_str}. JARVIS hasn't gone anywhere.",
+                    f"Late night, {name}. {time_str}. I'm right here with you.",
+                    f"You're up late, {name}. {time_str}. JARVIS is at full alert.",
+                ]
+
+            # Pick one randomly for variety
+            import random
+            items.append(random.choice(welcome_options))
 
         self._is_first_start = False
         return items
@@ -131,9 +199,16 @@ class WelcomeBriefing:
                     self._speak(text)
                     await self._delay(1000)
 
-        # Final closing
+        # Final closing — vary the line so it doesn't feel repetitive
+        closing_lines = [
+            "Briefing complete. Ready when you are.",
+            "All set, Bobby. What would you like to do first?",
+            "Briefing complete. Standing by for your command.",
+            "Done. I'm here whenever you need me.",
+            "That's the rundown. What shall we tackle next?",
+        ]
         if self._speak:
-            self._speak("Briefing complete. Standing by for your command, sir.")
+            self._speak(random.choice(closing_lines))
 
         logger.info("[Briefing] Briefing complete")
 
@@ -223,7 +298,7 @@ class WelcomeBriefing:
                         start_str = ev.get("start", "")
                         try:
                             start_dt = datetime.strptime(start_str[:16], "%Y-%m-%d %H:%M:%S")
-                            time_str = start_dt.strftime("%-I:%M %p")
+                            time_str = start_dt.strftime("%I:%M %p")
                         except Exception:
                             time_str = "TBD"
                         event_parts.append(f"{title} at {time_str}")
@@ -324,8 +399,8 @@ class WelcomeBriefing:
 
                 # Get active window
                 try:
-                    from core.screen_monitor import ScreenMonitor
-                    sm = ScreenMonitor()
+                    from core.screen_monitor import ScreenIntelligence
+                    sm = ScreenIntelligence()
                     active_window = sm.get_active_window_title()
                 except Exception:
                     active_window = ""

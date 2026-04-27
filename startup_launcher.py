@@ -56,7 +56,7 @@ def register_startup(app_name: str = "MARK-XXXV", minimize_to_tray: bool = True)
             winreg.SetValueEx(run_key, app_name, 0, winreg.REG_SZ, exe_str)
 
         logger.info(f"[Startup] Registered '{app_name}' to run at startup")
-        logging.getLogger("Startup").debug('{app_name} will start automatically on Windows boot')
+        logging.getLogger("Startup").debug(f'{app_name} will start automatically on Windows boot')
         return True
 
     except PermissionError:
@@ -65,7 +65,7 @@ def register_startup(app_name: str = "MARK-XXXV", minimize_to_tray: bool = True)
         return False
     except Exception as e:
         logger.error(f"[Startup] Failed to register: {e}")
-        logging.getLogger("Startup").info('ERROR: {e}')
+        logging.getLogger("Startup").info(f'ERROR: {e}')
         return False
 
 
@@ -79,16 +79,16 @@ def unregister_startup(app_name: str = "MARK-XXXV") -> bool:
             try:
                 winreg.DeleteValue(run_key, app_name)
                 logger.info(f"[Startup] Unregistered '{app_name}' from startup")
-                logging.getLogger("Startup").debug('{app_name} removed from startup')
+                logging.getLogger("Startup").debug(f'{app_name} removed from startup')
                 return True
             except FileNotFoundError:
                 logger.info(f"[Startup] '{app_name}' was not in startup")
-                logging.getLogger("Startup").info('INFO: {app_name} was not registered')
+                logging.getLogger("Startup").info(f'INFO: {app_name} was not registered')
                 return True
 
     except Exception as e:
         logger.error(f"[Startup] Failed to unregister: {e}")
-        logging.getLogger("Startup").info('ERROR: {e}')
+        logging.getLogger("Startup").info(f'ERROR: {e}')
         return False
 
 
@@ -146,17 +146,17 @@ Register-ScheduledTask -TaskName 'MARK-XXXV' -Action $action -Trigger $trigger -
             return True
         else:
             logger.warning(f"[Startup] Task Scheduler failed: {result.stderr or result.stdout}")
-            logging.getLogger("Startup").info('WARN: Task Scheduler: {result.stderr or result.stdout}')
+            logging.getLogger("Startup").info(f'WARN: Task Scheduler: {result.stderr or result.stdout}')
             return False
 
     except Exception as e:
         logger.error(f"[Startup] Task Scheduler registration failed: {e}")
-        logging.getLogger("Startup").info('ERROR: Task Scheduler: {e}')
+        logging.getLogger("Startup").info(f'ERROR: Task Scheduler: {e}')
         return False
 
     except Exception as e:
         logger.error(f"[Startup] Task Scheduler registration failed: {e}")
-        logging.getLogger("Startup").info('ERROR: Task Scheduler: {e}')
+        logging.getLogger("Startup").info(f'ERROR: Task Scheduler: {e}')
         return False
 
 
@@ -179,7 +179,7 @@ def unregister_task_scheduler() -> bool:
             return True
 
     except Exception as e:
-        logging.getLogger("Startup").info('ERROR: {e}')
+        logging.getLogger("Startup").info(f'ERROR: {e}')
         return False
 
 

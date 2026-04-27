@@ -39,8 +39,7 @@ class SessionEvent:
 
 
 # Windows API types
-WTS_SESSION_INFORMATION = ctypes.Structure
-class WTS_SESSION_INFORMATION(WTS_SESSION_INFORMATION):
+class WTS_SESSION_INFORMATION(ctypes.Structure):
     _fields_ = [
         ("ExecEnvId", wintypes.ULONG),
         ("State", wintypes.ULONG),
@@ -159,8 +158,8 @@ class LockMonitor:
                         # If last input was > 10 minutes ago (600000ms) and now there's activity
                         # This might indicate unlock after lock
                         if last_input_time > 0 and time_diff > 600000:
-                            # Check if this is a real unlock by checking focus
-                            pass
+                            self._fire_event(SessionEvent.UNLOCK)
+                            logger.info("[LockMonitor] Session unlocked via activity wake")
 
                         last_input_time = current_time
 
@@ -185,9 +184,9 @@ class LockMonitor:
             token = ctypes.c_void_p()
             if ctypes.windll.advapi32.OpenProcessToken(process_id, 0x0002, ctypes.byref(token)):
                 session = wintypes.DWORD()
-                if ctypes.windll.advapi32.GetTokenInformation(token, 12, None, 0, ctypes.byref(wintypes.DWORD())):
-                    size = wintypes.DWORD()
-                    ctypes.windll.advapi32.GetTokenInformation(token, 12, ctypes.byref(session), ctypes.sizeof(session), ctypes.byref(size))
+                size = wintypes.DWORD()
+                if ctypes.windll.advapi32.GetTokenInformation(token, 12, ctypes.byref(session), ctypes.sizeof(session), ctypes.byref(size)):
+                    pass
                 ctypes.windll.kernel32.CloseHandle(token)
                 return session.value
         except Exception:

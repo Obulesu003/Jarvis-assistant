@@ -196,7 +196,7 @@ class ApprovalWorkflow:
                 logger.error(f"[Approval] UI notification failed: {e}")
 
         # Cleanup after delay
-        threading.Timer(5.0, self._cleanup, args=[request_id]).start()
+        threading.Timer(5.0, self._cleanup, args=(request_id,)).start()
 
         return True
 

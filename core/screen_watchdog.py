@@ -196,7 +196,7 @@ Respond ONLY as JSON:
                 if not img_bytes:
                     consecutive_failures += 1
                     if consecutive_failures > 3:
-                        logger.warning("[Watchdog] Multiple capture failures")
+                        logger.debug("[Watchdog] Screen capture unavailable (locked/secure screen)")
                     continue
 
                 consecutive_failures = 0
@@ -219,6 +219,7 @@ Respond ONLY as JSON:
                 kw_alert = self._check_keyword_alerts(description, window_title)
                 if kw_alert:
                     alert_msg = kw_alert
+                    self._last_window_title = window_title
 
                 # Priority 2: AI-detected important content
                 elif is_important and description:

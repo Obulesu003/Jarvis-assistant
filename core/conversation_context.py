@@ -366,21 +366,13 @@ class ConversationContextEngine:
         return None
 
     def _significant_change_detected(self) -> bool:
-        """
-        Detect if there has been a significant change that warrants volunteering.
-
-        Returns:
-            False by default (placeholder for future implementation)
-        """
+        """Detect if there has been a significant change that warrants volunteering."""
+        logger.debug("[ContextEngine] _significant_change_detected: not yet implemented, returning False")
         return False
 
     def _user_likely_available(self) -> bool:
-        """
-        Detect if the user is likely available for interaction.
-
-        Returns:
-            False by default (placeholder for future implementation)
-        """
+        """Detect if the user is likely available for interaction."""
+        logger.debug("[ContextEngine] _user_likely_available: not yet implemented, returning False")
         return False
 
     def _extract_topic(self, text: str) -> str:

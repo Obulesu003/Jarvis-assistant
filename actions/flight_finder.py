@@ -220,7 +220,7 @@ def _parse_flights_with_gemini(
         flights  = json.loads(text)
         return flights if isinstance(flights, list) else []
     except Exception as e:
-        logging.getLogger("FlightFinder").warning('️ Parse failed: {e}')
+        logging.getLogger("FlightFinder").warning(f'️ Parse failed: {e}')
         return []
 
 
@@ -329,7 +329,7 @@ def _save_to_notepad(content: str, origin: str, destination: str) -> str:
     filepath = desktop / filename
 
     filepath.write_text(content, encoding="utf-8")
-    logging.getLogger("FlightFinder").info('💾 Saved: {filepath}')
+    logging.getLogger("FlightFinder").info(f'💾 Saved: {filepath}')
 
     system  = platform.system()
     open_fn = {
@@ -392,7 +392,7 @@ def flight_finder(
     if speak:
         speak(f"Searching flights from {origin} to {destination} on {date}, sir.")
 
-    logging.getLogger("FlightFinder").info('️ {origin} -> {destination} | {date} | {cabin} | {passengers} pax')
+    logging.getLogger("FlightFinder").info(f'️ {origin} -> {destination} | {date} | {cabin} | {passengers} pax')
 
     try:
 
@@ -424,5 +424,5 @@ def flight_finder(
         return result
 
     except Exception as e:
-        logging.getLogger("FlightFinder").error('Error: {e}')
+        logging.getLogger("FlightFinder").error(f'Error: {e}')
         return f"Flight search failed, sir: {e}"

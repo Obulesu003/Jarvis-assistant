@@ -646,15 +646,76 @@ class OutlookAdapter(BaseIntegrationAdapter):
 
     def _action_update_event(self, event_id: str, updates: dict, **kwargs) -> ActionResult:
         """Update a calendar event."""
-        return ActionResult(success=False, error="Update event not yet implemented")
+        try:
+            await self._init_page()
+            page = self._page
+            title = updates.get("title")
+            start = updates.get("start")
+
+            if not title or not start:
+                return ActionResult(success=False, error="title and start required")
+
+            await page.goto("https://outlook.office.com/calendar")
+            await asyncio.sleep(2)
+            await page.wait_for_selector("[data-task-id='edit']", timeout=5000)
+            await page.click("[data-task-id='edit']")
+
+            title_input = page.locator("[role='textbox'][aria-label*='title']").first
+            await title_input.click()
+            await title_input.fill(title)
+            start_input = page.locator("[data-selection-index='0']").first
+            await start_input.click()
+            await start_input.fill(start)
+
+            await page.click("[data-task-id='save']")
+            await asyncio.sleep(1)
+            self.invalidate_cache()
+            return ActionResult(success=True, data={"updated": True, "title": title, "start": start})
+        except Exception as e:
+            return ActionResult(success=False, error=f"Could not update event: {e}")
 
     def _action_delete_event(self, event_id: str, **kwargs) -> ActionResult:
         """Delete a calendar event."""
-        return ActionResult(success=False, error="Delete event not yet implemented")
+        try:
+            asyncio.get_event_loop().run_until_complete(self._init_page())
+            page = self._page
+
+            await page.goto(f"https://outlook.office.com/calendar/item/{event_id}")
+            await asyncio.sleep(2)
+            await page.wait_for_selector("[data-task-id='delete']", timeout=5000)
+            await page.click("[data-task-id='delete']")
+            await asyncio.sleep(1)
+
+            self.invalidate_cache()
+            return ActionResult(success=True, data={"deleted": event_id})
+        except Exception as e:
+            return ActionResult(success=False, error=f"Could not delete event: {e}")
 
     def _action_find_meeting_time(self, attendees: list | None = None, duration: int = 60, **kwargs) -> ActionResult:
         """Find available meeting times."""
-        return ActionResult(success=False, error="Find meeting time not yet implemented")
+        try:
+            asyncio.get_event_loop().run_until_complete(self._init_page())
+            page = self._page
+
+            await page.goto("https://outlook.office.com/calendar/findmeetingtimes")
+            await asyncio.sleep(2)
+
+            if attendees:
+                attendee_input = page.locator("[aria-label*='attendee']").first
+                for attendee in attendees:
+                    await attendee_input.fill(attendee)
+                    await page.keyboard.press("Enter")
+                    await asyncio.sleep(0.5)
+
+            await page.wait_for_timeout(duration * 1000)
+
+            available_slots = []
+            for slot in page.locator("[data-time-slot]"):
+                available_slots.append(slot.inner_text())
+
+            return ActionResult(success=True, data={"slots": available_slots, "duration": duration})
+        except Exception as e:
+            return ActionResult(success=False, error=f"Could not find meeting time: {e}")
 
     async def _wait_for_loading(self, page, timeout: int = 10):
         """Wait for loading indicators to disappear."""

@@ -77,7 +77,7 @@ def fix_jarvis_desktop():
     sizes = [64, 48, 32, 16]
     images = [create_jarvis_image(s) for s in sizes]
     save_ico(images, str(icon_path))
-    logging.getLogger("OK").info('Created JARVIS icon: {icon_path.name} ({icon_path.stat().st_size} bytes)')
+    logging.getLogger("OK").info(f'Created JARVIS icon: {icon_path.name} ({icon_path.stat().st_size} bytes)')
 
     # Create proper Windows shortcut using Shell
     pythoncom.CoInitialize()

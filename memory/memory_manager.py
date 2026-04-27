@@ -297,7 +297,7 @@ def extract_memory(user_text: str, jarvis_text: str, api_key: str) -> dict:
         return {}
     except Exception as e:
         if "429" not in str(e):
-            logging.getLogger("Memory").info('WARN Extract failed: {e}')
+            logging.getLogger("Memory").info(f'WARN Extract failed: {e}')
         return {}
 
 

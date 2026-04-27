@@ -462,6 +462,63 @@ class UniversalOrchestrator:
                 return steps
 
         # ================================================================ #
+        # NAVIGATION (browser / website) — fast keyword path, no LLM needed   #
+        # ================================================================ #
+
+        if any(kw in rl for kw in ["go to ", "navigate to ", "open website", "open web page", "open link"]):
+            url = self._extract_browser_url(request)
+            if url:
+                steps.append({
+                    "adapter": "system",
+                    "action": "open_application",
+                    "params": {"url": url},
+                    "description": f"Open {url}",
+                })
+                return steps
+
+        # ================================================================ #
+        # APP INTERACTION (click, type, switch) — pywinauto path            #
+        # ================================================================ #
+
+        if any(kw in rl for kw in ["what windows", "what's open", "what is open", "show open windows",
+                                     "list windows", "show windows", "running apps", "open apps",
+                                     "which app", "active window", "what am i looking at"]):
+            steps.append({
+                "adapter": "windows_app",
+                "action": "list_open_windows",
+                "params": {},
+                "description": "List open windows",
+            })
+            return steps
+
+        if any(kw in rl for kw in ["click ", "click on ", "click the ", "type in ", "type into ", "switch to "]):
+            target = self._extract_interaction_target(request, rl)
+            if target:
+                if any(kw in rl for kw in ["click ", "click on ", "click the "]):
+                    steps.append({
+                        "adapter": "windows_app",
+                        "action": "click_button",
+                        "params": {"app_name": target.get("app"), "button_text": target.get("element", "")},
+                        "description": f"Click {target.get('element') or target.get('app')}",
+                    })
+                elif any(kw in rl for kw in ["type in ", "type into "]):
+                    text = self._extract_type_text(request)
+                    steps.append({
+                        "adapter": "windows_app",
+                        "action": "type_text",
+                        "params": {"app_name": target.get("app"), "text": text, "field_text": target.get("element", "")},
+                        "description": f"Type in {target.get('app')}",
+                    })
+                elif "switch to" in rl:
+                    steps.append({
+                        "adapter": "windows_app",
+                        "action": "connect_app",
+                        "params": {"app_name": target.get("app")},
+                        "description": f"Switch to {target.get('app')}",
+                    })
+                return steps
+
+        # ================================================================ #
         # SYSTEM / APP OPERATIONS                                         #
         # ================================================================ #
 
@@ -520,23 +577,34 @@ class UniversalOrchestrator:
             return steps
 
         # Active window / app awareness
-        if any(kw in rl for kw in ["what's open", "what is open", "which window",
-                                     "which app", "what app is", "active window",
-                                     "what am i doing", "what am i looking"]):
-            steps.append({
-                "adapter": "system",
-                "action": "get_active_window",
-                "params": {},
-                "description": "Get active window",
-            })
-            return steps
-
         if any(kw in rl for kw in ["system info", "cpu", "memory", "disk"]):
             steps.append({
                 "adapter": "system",
                 "action": "get_system_info",
                 "params": {},
                 "description": "Get system info",
+            })
+            return steps
+
+        # Time queries — keyword route, no LLM needed
+        if any(kw in rl for kw in ["what time", "current time", "what's the time", "time is it",
+                                     "what day", "what's today", "what date", "tell me the time"]):
+            steps.append({
+                "adapter": "system",
+                "action": "get_current_time",
+                "params": {},
+                "description": "Get current time and date",
+            })
+            return steps
+
+        # Windows update check — keyword route, no LLM needed
+        if any(kw in rl for kw in ["check updates", "windows update", "update check",
+                                     "any updates", "pending updates", "install updates"]):
+            steps.append({
+                "adapter": "system",
+                "action": "check_windows_updates",
+                "params": {},
+                "description": "Check for Windows updates",
             })
             return steps
 
@@ -643,15 +711,23 @@ class UniversalOrchestrator:
                 })
                 return steps
 
-        if any(kw in rl for kw in ["brightness", "dim", "set light", "light brightness"]):
+        if any(kw in rl for kw in ["brightness", "dim", "set light", "light brightness", "screen brightness"]):
             brightness = self._extract_brightness(request)
             if brightness:
                 entity = self._extract_ha_entity(request, "light")
+                # Try homeassistant first (smart lights), fall back to system (laptop display)
                 steps.append({
                     "adapter": "homeassistant",
                     "action": "set_brightness",
                     "params": {"entity_id": entity, "brightness": brightness},
                     "description": f"Set brightness to {brightness}%",
+                })
+                # Also queue system-level brightness as fallback
+                steps.append({
+                    "adapter": "system",
+                    "action": "set_screen_brightness",
+                    "params": {"brightness": brightness},
+                    "description": f"Set screen brightness to {brightness}%",
                 })
                 return steps
 
@@ -894,7 +970,14 @@ class UniversalOrchestrator:
             msg = f"No adapter registered: {adapter_name}"
             raise ValueError(msg)
 
-        return adapter.execute_action(action, **params)
+        # Pop 'action' from params if present — it conflicts with execute_action's
+        # positional 'action' arg (which is the adapter method name, not a param).
+        # For steps where the adapter method itself expects an 'action' param,
+        # we pass it via kwargs under its own name.
+        media_action = params.pop("action", None)
+        kwargs = {"action": media_action} if media_action is not None else {}
+        kwargs.update(params)
+        return adapter.execute_action(action, **kwargs)
 
     # ------------------------------------------------------------------ #
     # Response formatting                                               #
@@ -1207,6 +1290,63 @@ class UniversalOrchestrator:
         for prefix in ["open ", "launch ", "start ", "run ", "close ", "quit ", "kill ", "install "]:
             if prefix in request.lower():
                 return request.lower().split(prefix)[1].strip().rstrip(".,?!")
+        return ""
+
+    def _extract_browser_url(self, request: str) -> str | None:
+        """Extract URL from navigation phrases like 'go to X' or 'navigate to X'."""
+        match = re.search(r"(?:go to|navigate to|open website|open web page|open link)\s+(\S+)", request, re.IGNORECASE)
+        if match:
+            url = match.group(1).strip().rstrip(".,?!")
+            if not url.startswith(("http://", "https://")):
+                url = "https://" + url
+            return url
+        return None
+
+    def _extract_interaction_target(self, request: str, request_lower: str) -> dict | None:
+        """Extract app name and element from interaction phrases like 'click X in Y'."""
+        # Pattern: "click [element] in [app]" or "click on [app]" or "switch to [app]"
+        # or just "click [element]" or "click [app]" alone
+        app_patterns = ["teams", "notepad", "excel", "word", "calculator",
+                        "vscode", "chrome", "spotify", "discord", "whatsapp",
+                        "file explorer", "outlook", "powershell", "terminal"]
+
+        # Find the app name
+        found_app = None
+        for app in app_patterns:
+            if app in request_lower:
+                found_app = app
+                break
+
+        if not found_app:
+            # Try to extract app name after "in", "on", "switch to"
+            m = re.search(r"(?:in|on|switch to)\s+(\w[\w\s]*?)(?:\s|$|,|\.)", request_lower)
+            if m:
+                found_app = m.group(1).strip()
+
+        if not found_app:
+            return None
+
+        # Extract the element/target (what to click or type)
+        element = None
+        # "click [something]" where something is NOT the app name
+        click_m = re.search(r"click(?: on| the)?\s+([^\s][^\n]*?)(?:\s+in\s|\s+on\s|$)", request_lower)
+        if click_m:
+            candidate = click_m.group(1).strip().rstrip(".,?!")
+            if candidate and candidate != found_app and len(candidate) < 50:
+                element = candidate
+
+        return {"app": found_app.title(), "element": element}
+
+    def _extract_type_text(self, request: str) -> str:
+        """Extract text to type from 'type in X: text' or 'type text' patterns."""
+        # "type in [app]: [text]" or "type [text] in [app]"
+        m = re.search(r"type(?: in| into)?[^:]*:\s*(.+)$", request, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        # "type [text]" without explicit app
+        m2 = re.search(r"type\s+(?:in|into\s+)?[\w\s]+\s+(?:that\s+|saying\s+)?[:\-]?\s*(.+)$", request, re.IGNORECASE)
+        if m2:
+            return m2.group(1).strip()
         return ""
 
     def _extract_file_path(self, request: str) -> str:

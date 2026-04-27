@@ -65,6 +65,7 @@ class WhatsAppAdapter(BaseIntegrationAdapter):
         super().__init__(session_dir)
         self._page = None
         self._logged_in = False
+        self.SELECTORS = {**cls.SELECTORS, "message_input": 'div[contenteditable="true"][data-tab="10"]'}
         logger.info("[WhatsApp] Adapter initialized")
 
     def get_capabilities(self) -> list[str]:
@@ -641,9 +642,6 @@ class WhatsAppAdapter(BaseIntegrationAdapter):
             )
         except Exception as e:
             return ActionResult(success=False, error=str(e))
-
-    # Override message_input with more reliable fallback selector
-    SELECTORS["message_input"] = 'div[contenteditable="true"][data-tab="10"]'
 
     def save_session(self) -> bool:
         """Save current session."""

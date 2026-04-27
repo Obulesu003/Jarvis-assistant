@@ -70,7 +70,8 @@ def get_gemini_key() -> str | None:
 
 
 def is_configured() -> bool:
+    from core.api_key_manager import is_configured as _is_configured
     if _KEY_MANAGER_OK:
-        return is_configured()
+        return _is_configured()
     key = get_gemini_key()
     return bool(key and len(key) > 15)

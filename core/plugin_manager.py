@@ -83,7 +83,7 @@ class PluginManager:
         handler     = getattr(module, "PLUGIN_HANDLER", None)
 
         if not name or not declaration or not handler:
-            logging.getLogger("PluginManager").info('{path.name}: missing PLUGIN_NAME, PLUGIN_TOOL_DECLARATION, or PLUGIN_HANDLER')
+            logging.getLogger("PluginManager").info(f'{path.name}: missing PLUGIN_NAME, PLUGIN_TOOL_DECLARATION, or PLUGIN_HANDLER')
             return None
 
         return {

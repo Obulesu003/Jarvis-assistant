@@ -170,8 +170,7 @@ def _autopan(samples: list[float], rate: float = 1.0, depth: float = 0.5) -> lis
     for i in range(n):
         t = i / SAMPLE_RATE
         pan = 0.5 + 0.5 * math.sin(2 * math.pi * rate * t)
-        # Simple stereo simulation (mono output)
-        result[i] = samples[i]
+        result[i] = samples[i] * pan
 
     return result
 

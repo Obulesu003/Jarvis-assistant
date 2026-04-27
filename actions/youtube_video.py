@@ -274,7 +274,7 @@ def _scrape_video_info(video_id: str) -> dict:
             info["likes"] = m.group(1)
         return info
     except Exception as e:
-        logging.getLogger("YouTube").info('Info scrape failed: {e}')
+        logging.getLogger("YouTube").info(f'Info scrape failed: {e}')
         return {}
 
 
@@ -298,7 +298,7 @@ def _scrape_trending(region: str = "TR", max_results: int = 8) -> list[dict]:
                 break
         return results
     except Exception as e:
-        logging.getLogger("YouTube").info('Trending scrape failed: {e}')
+        logging.getLogger("YouTube").info(f'Trending scrape failed: {e}')
         return []
 
 
@@ -320,7 +320,7 @@ def _handle_play(parameters: dict, player) -> str:
     try:
         return asyncio.run(_play_youtube(query))
     except Exception as e:
-        logging.getLogger("YouTube").info('Playwright failed, falling back: {e}')
+        logging.getLogger("YouTube").info(f'Playwright failed, falling back: {e}')
         with contextlib.suppress(Exception):
             asyncio.run(_close_browser())
         return _handle_play_pyautogui(parameters, player)
@@ -521,7 +521,7 @@ def youtube_video(
     if player:
         player.write_log(f"[YouTube] Action: {action}")
 
-    logging.getLogger("YouTube").info('Action: {action}  Params: {params}')
+    logging.getLogger("YouTube").info(f'Action: {action}  Params: {params}')
 
     handler = _ACTION_MAP.get(action)
     if handler is None:
@@ -532,5 +532,5 @@ def youtube_video(
             return handler(params, player) or "Done."
         return handler(params, player, speak) or "Done."
     except Exception as e:
-        logging.getLogger("YouTube").error('Error in {action}: {e}')
+        logging.getLogger("YouTube").error(f'Error in {action}: {e}')
         return f"YouTube {action} failed, sir: {e}"

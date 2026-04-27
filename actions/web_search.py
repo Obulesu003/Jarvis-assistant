@@ -117,11 +117,11 @@ def web_search(
     if player:
         player.write_log(f"[Search] {query or ', '.join(items)}")
 
-    logging.getLogger("WebSearch").info('Query: {query!r}  Mode: {mode}')
+    logging.getLogger("WebSearch").info(f'Query: {query!r}  Mode: {mode}')
 
     try:
         if mode == "compare" and items:
-            logging.getLogger("WebSearch").info('Comparing: {items}')
+            logging.getLogger("WebSearch").info(f'Comparing: {items}')
             result = _compare(items, aspect)
             logging.getLogger("WebSearch").debug('Compare done.')
             return result
@@ -132,12 +132,12 @@ def web_search(
             logging.getLogger("WebSearch").debug('Gemini OK.')
             return result
         except Exception as e:
-            logging.getLogger("WebSearch").warning('Gemini failed ({e}), trying DDG...')
+            logging.getLogger("WebSearch").warning(f'Gemini failed ({e}), trying DDG...')
             results = _ddg_search(query)
             result  = _format_ddg(query, results)
-            logging.getLogger("WebSearch").debug('DDG: {len(results)} results.')
+            logging.getLogger("WebSearch").debug(f'DDG: {len(results)} results.')
             return result
 
     except Exception as e:
-        logging.getLogger("WebSearch").error('Failed: {e}')
+        logging.getLogger("WebSearch").error(f'Failed: {e}')
         return f"Search failed, sir: {e}"

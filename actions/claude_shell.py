@@ -165,7 +165,7 @@ class ClaudeShell:
 
             self.state = self.STATE_READY
             self.last_active = time.time()
-            logging.getLogger("ClaudeShell").debug('Started in {self.cwd}')
+            logging.getLogger("ClaudeShell").debug(f'Started in {self.cwd}')
             return True, f"Claude Code shell started. Working in: {self.cwd}"
 
         except FileNotFoundError:
@@ -250,7 +250,7 @@ class ClaudeShell:
         self._set_state(self.STATE_THINKING)
 
         prompt_text = prompt.strip()
-        logging.getLogger("ClaudeShell").info('[{self.session_id}] >> {prompt_text[:80]}')
+        logging.getLogger("ClaudeShell").info(f'[{self.session_id}] >> {prompt_text[:80]}')
 
         try:
             self.process.stdin.write(prompt_text + "\n")
@@ -297,7 +297,7 @@ class ClaudeShell:
         elif len(output) > 4000:
             output = output[:4000] + "\n\n[Output truncated]"
 
-        logging.getLogger("ClaudeShell").debug('Response ({len(output)} chars)')
+        logging.getLogger("ClaudeShell").debug(f'Response ({len(output)} chars)')
         return output, self.state
 
     def interrupt(self) -> str:

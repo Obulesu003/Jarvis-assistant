@@ -229,7 +229,7 @@ Code for {file_path}:"""
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(code, encoding="utf-8")
 
-        logging.getLogger("DevAgent").debug('Written: {file_path} ({len(code)} chars)')
+        logging.getLogger("DevAgent").debug(f'Written: {file_path} ({len(code)} chars)')
         return code
 
     except Exception as e:
@@ -287,14 +287,14 @@ def _open_vscode(project_dir: Path) -> bool:
                 stderr=subprocess.DEVNULL
             )
             time.sleep(1.5)
-            logging.getLogger("DevAgent").info('💻 VSCode opened: {project_dir}')
+            logging.getLogger("DevAgent").info(f'💻 VSCode opened: {project_dir}')
             return True
         except Exception:
             continue
     return False
 
 def _run_project(run_command: str, project_dir: Path, timeout: int = 30) -> str:
-    logging.getLogger("DevAgent").info('🚀 Running: {run_command}')
+    logging.getLogger("DevAgent").info(f'🚀 Running: {run_command}')
     try:
         parts = run_command.split()
         if parts[0].lower() == "python":
@@ -336,7 +336,7 @@ def _try_auto_install(error_output: str, project_dir: Path) -> bool:
         return False
 
     pkg = match.group(1).replace("_", "-").split(".")[0]
-    logging.getLogger("DevAgent").info('🔧 Auto-installing missing package: {pkg}')
+    logging.getLogger("DevAgent").info(f'🔧 Auto-installing missing package: {pkg}')
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", pkg],
@@ -428,12 +428,12 @@ Fixed code for {fix_path}:"""
             full_path.write_text(fixed, encoding="utf-8")
 
             updated_codes[fix_path] = fixed
-            logging.getLogger("DevAgent").info('🔧 Fixed: {fix_path}')
+            logging.getLogger("DevAgent").info(f'🔧 Fixed: {fix_path}')
 
         except Exception as e:
             if _is_rate_limit(e):
                 raise RateLimitError(str(e))
-            logging.getLogger("DevAgent").warning('️ Could not fix {fix_path}: {e}')
+            logging.getLogger("DevAgent").warning(f'️ Could not fix {fix_path}: {e}')
 
     return updated_codes
 
@@ -447,7 +447,7 @@ def _build_project(
 ) -> str:
 
     def log(msg: str):
-        logging.getLogger("DevAgent").info('{msg}')
+        logging.getLogger("DevAgent").info(f'{msg}')
         if player:
             player.write_log(f"[DevAgent] {msg}")
 

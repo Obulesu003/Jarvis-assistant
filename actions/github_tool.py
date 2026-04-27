@@ -230,7 +230,7 @@ def github_tool(
     if player:
         player.write_log(f"[GitHub] Action: {action}")
 
-    logging.getLogger("GitHub").info('Action: {action}  Params: {params}')
+    logging.getLogger("GitHub").info(f'Action: {action}  Params: {params}')
 
     handler = _GITHUB_ACTIONS.get(action)
     if handler is None:
@@ -242,5 +242,5 @@ def github_tool(
     try:
         return handler(params, player)
     except Exception as e:
-        logging.getLogger("GitHub").info('Error in {action}: {e}')
+        logging.getLogger("GitHub").info(f'Error in {action}: {e}')
         return f"GitHub {action} failed, sir: {e}"

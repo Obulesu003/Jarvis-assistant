@@ -154,7 +154,7 @@ Question: {question}
 
 Answer:"""
 
-            answer = self._gemini.generate(prompt)
+            answer = self._gemini.models.generate_content(model="gemini-2.5-flash", contents=prompt)
             return {
                 "answer": answer,
                 "sources": sources,

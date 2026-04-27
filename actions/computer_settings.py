@@ -91,7 +91,7 @@ def volume_set(value: int):
             vol       = cast(interface, POINTER(IAudioEndpointVolume))
             vol_db    = -65.25 if value == 0 else max(-65.25, 20 * math.log10(value / 100))
             vol.SetMasterVolumeLevel(vol_db, None)
-            logging.getLogger("Settings").info('🔊 Volume -> {value}%')
+            logging.getLogger("Settings").info(f'🔊 Volume -> {value}%')
             return
         except Exception as e:
             logging.getLogger("Settings").warning(f"️ pycaw failed: {e}")
@@ -605,7 +605,7 @@ IMPORTANT:
         text = __import__("re").sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
         return json.loads(text)
     except Exception as e:
-        logging.getLogger("Settings").warning('️ Intent detection failed: {e}')
+        logging.getLogger("Settings").warning(f'️ Intent detection failed: {e}')
         return {"action": description.lower().replace(" ", "_"), "value": None}
 
 def computer_settings(
@@ -641,7 +641,7 @@ def computer_settings(
     if not action:
         return "No action could be determined, sir."
 
-    logging.getLogger("Settings").info('️ Action: {action}  Value: {value}')
+    logging.getLogger("Settings").info(f'️ Action: {action}  Value: {value}')
 
 
     if action == "volume_set":
