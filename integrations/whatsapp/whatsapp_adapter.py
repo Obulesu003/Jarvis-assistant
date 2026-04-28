@@ -65,7 +65,7 @@ class WhatsAppAdapter(BaseIntegrationAdapter):
         super().__init__(session_dir)
         self._page = None
         self._logged_in = False
-        self.SELECTORS = {**cls.SELECTORS, "message_input": 'div[contenteditable="true"][data-tab="10"]'}
+        self.SELECTORS = {**WhatsAppAdapter.SELECTORS, "message_input": 'div[contenteditable="true"][data-tab="10"]'}
         logger.info("[WhatsApp] Adapter initialized")
 
     def get_capabilities(self) -> list[str]:
